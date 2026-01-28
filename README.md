@@ -1,30 +1,93 @@
 # 🔍 Code Quality Analyzer
 
-A comprehensive Python code quality analysis tool that generates detailed reports on code structure, performance, security, and maintainability.
+A comprehensive Python code quality analysis tool that automatically analyzes your code and generates detailed quality reports.
 
 ---
 
 ## 📋 Overview
 
-This tool analyzes Python code and generates detailed quality reports including:
+This tool analyzes Python code files and generates detailed quality reports including:
 
-- ✅ Bug detection (critical, high, medium, low priority)
-- ✅ Code structure analysis
-- ✅ Performance optimization recommendations
-- ✅ Security vulnerability assessment
-- ✅ Error handling evaluation
-- ✅ Best practices compliance
-- ✅ Maintainability metrics
+- ✅ **Bug Detection** - Critical, high, medium, and low priority issues
+- ✅ **Code Structure** - Function length, complexity, duplication
+- ✅ **Error Handling** - Try/except coverage, bare except clauses
+- ✅ **Performance** - Inefficient patterns, optimization opportunities
+- ✅ **Security** - Hardcoded secrets, dangerous functions
+- ✅ **Maintainability** - Docstrings, type hints, naming conventions
+- ✅ **Best Practices** - PEP 8 compliance, Python idioms
 
 ---
 
-## 🚀 Features
+## 🚀 Quick Start
 
-- **Comprehensive Analysis**: Analyzes code structure, error handling, performance, and security
-- **Detailed Reports**: Generates markdown reports with severity ratings and recommendations
-- **Multiple Report Types**: Executive summary, detailed analysis, and comparison reports
-- **Production Readiness Assessment**: Provides clear go/no-go deployment recommendations
-- **Actionable Insights**: Specific line numbers and code examples for each issue
+### **Installation**
+
+```bash
+# Clone the repository
+git clone https://github.com/icharshal/Code_Quality_Analyzer.git
+cd Code_Quality_Analyzer
+
+# No dependencies required - uses Python standard library only!
+```
+
+### **Usage**
+
+```bash
+# Analyze a single file
+python analyzer.py --file your_script.py
+
+# Analyze all Python files in a directory
+python analyzer.py --directory ./src
+
+# Save report to file (coming soon)
+python analyzer.py --file script.py --output report.md
+```
+
+---
+
+## 📊 Example Output
+
+```
+================================================================================
+📊 CODE QUALITY REPORT - sample_code.py
+================================================================================
+
+🎯 Overall Quality Score: 6.2/10 ⭐⭐⭐☆☆
+
+📈 Category Scores:
+  - Structure: 9.5/10
+  - Error Handling: 8.0/10
+  - Performance: 9.7/10
+  - Security: 7.0/10
+  - Maintainability: 8.0/10
+  - Best Practices: 9.6/10
+
+📏 Code Metrics:
+  - Lines of Code: 20
+  - Functions: 3
+  - Classes: 1
+  - Avg Function Length: 4.3 lines
+
+🐛 Issues Found: 4
+
+  CRITICAL (1):
+    - Line 15: Hardcoded Secret
+      Potential hardcoded secret found
+
+  HIGH (1):
+    - Line 11: Bare Except Clause
+      Using bare except: catches all exceptions including system exits
+
+  LOW (2):
+    - Line 12: Print Statement
+      Consider using logging instead of print()
+    - Line 18: Naming Convention
+      Function 'VeryLongFunctionName' should use snake_case
+
+================================================================================
+⚠️  NEEDS IMPROVEMENT - Significant refactoring recommended
+================================================================================
+```
 
 ---
 
@@ -33,155 +96,127 @@ This tool analyzes Python code and generates detailed quality reports including:
 ```
 Code_Quality_Analyzer/
 ├── README.md                          # This file
-├── analyzer.py                        # Main analyzer script (coming soon)
+├── analyzer.py                        # Main analyzer tool ⭐
 ├── reports/
-│   ├── CODE_QUALITY_REPORT_FINAL.md  # Comprehensive analysis report
-│   ├── QUALITY_SUMMARY.md            # Executive summary
-│   └── COMPARISON_REPORT.md          # Before/after comparison
+│   ├── CODE_QUALITY_REPORT_FINAL.md  # Example comprehensive report
+│   └── QUALITY_SUMMARY.md            # Example executive summary
 ├── examples/
-│   ├── dgrive_to_gcs_28-1-26_ver2_FIXED.py  # Analyzed code example
-│   └── analysis_results.md           # Example analysis results
+│   └── sample_code.py                # Sample code to test analyzer
 └── docs/
-    ├── USAGE.md                       # How to use the analyzer
-    └── METRICS.md                     # Explanation of metrics
+    ├── USAGE.md                       # Detailed usage guide
+    └── METRICS.md                     # Metrics explanation
 ```
-
----
-
-## 📊 Sample Analysis Results
-
-### **Overall Quality Score: 9.5/10** ⭐⭐⭐⭐⭐
-
-| Category | Score |
-|----------|-------|
-| Code Structure | 9.5/10 |
-| Error Handling | 9.0/10 |
-| Performance | 9.0/10 |
-| Maintainability | 9.5/10 |
-| Security | 8.5/10 |
-| Documentation | 9.0/10 |
 
 ---
 
 ## 🔍 What Gets Analyzed
 
-### **1. Code Structure**
+### **1. Code Structure (20% weight)**
 
-- Class and method organization
-- Single Responsibility Principle
-- Separation of concerns
-- Modularity and reusability
+- Function and method length
+- Cyclomatic complexity
+- Code duplication
+- Class organization
 
-### **2. Error Handling**
+### **2. Error Handling (20% weight)**
 
-- Exception handling completeness
-- Retry logic and fallback mechanisms
+- Try/except coverage
+- Bare except clauses
 - Resource cleanup
 - Error logging
 
-### **3. Performance**
+### **3. Performance (15% weight)**
 
-- Threading and concurrency
-- Memory usage optimization
-- API call efficiency
-- Caching strategies
+- List comprehension opportunities
+- Inefficient loops
+- Algorithm complexity
 
-### **4. Security**
+### **4. Security (15% weight)**
 
-- Authentication methods
-- Secret management
+- Hardcoded secrets (passwords, API keys, tokens)
+- Dangerous functions (eval, exec)
 - Input validation
-- Path traversal protection
 
-### **5. Best Practices**
+### **5. Maintainability (15% weight)**
+
+- Docstring coverage
+- Type hints
+- Naming conventions
+- Code readability
+
+### **6. Best Practices (15% weight)**
 
 - PEP 8 compliance
-- Type hints
-- Docstrings
-- Naming conventions
+- Python idioms
+- Logging vs print statements
+- Proper naming conventions
 
 ---
 
-## 📈 Report Types
+## 📊 Quality Scores
 
-### **1. Comprehensive Report** (`CODE_QUALITY_REPORT_FINAL.md`)
-
-- Detailed analysis of all aspects
-- Line-by-line issue identification
-- Specific recommendations
-- Code examples
-- 500+ lines of detailed analysis
-
-### **2. Executive Summary** (`QUALITY_SUMMARY.md`)
-
-- Quick overview
-- Key scores and metrics
-- Deployment recommendation
-- Critical issues only
-
-### **3. Comparison Report** (`COMPARISON_REPORT.md`)
-
-- Before/after analysis
-- Improvement metrics
-- Fixed issues tracking
-- Progress visualization
+| Score | Rating | Meaning |
+|-------|--------|---------|
+| 9.0-10.0 | ⭐⭐⭐⭐⭐ Excellent | Production ready |
+| 7.0-8.9 | ⭐⭐⭐⭐☆ Good | Minor improvements needed |
+| 5.0-6.9 | ⭐⭐⭐☆☆ Fair | Significant improvements needed |
+| 3.0-4.9 | ⭐⭐☆☆☆ Poor | Major refactoring required |
+| 0.0-2.9 | ⭐☆☆☆☆ Critical | Not production ready |
 
 ---
 
-## 🎯 Use Cases
+## 🎯 Features
 
-1. **Pre-Deployment Review**: Assess code quality before production deployment
-2. **Code Review**: Automated code review for pull requests
-3. **Technical Debt Assessment**: Identify areas needing refactoring
-4. **Team Standards**: Ensure code meets team quality standards
-5. **Learning Tool**: Understand best practices through detailed feedback
-
----
-
-## 📊 Metrics Explained
-
-### **Quality Score (0-10)**
-
-- **9-10**: Excellent - Production ready
-- **7-8**: Good - Minor improvements needed
-- **5-6**: Fair - Significant improvements needed
-- **3-4**: Poor - Major refactoring required
-- **0-2**: Critical - Not production ready
-
-### **Bug Severity**
-
-- **Critical**: Prevents execution, must fix immediately
-- **High**: Causes failures, fix before deployment
-- **Medium**: May cause issues, fix soon
-- **Low**: Minor issues, fix when convenient
-
----
-
-## 🛠️ Example Analysis
-
-**Input**: Python script with migration logic
-
-**Output**:
-
-- ✅ 0 critical bugs
-- ✅ 0 high priority issues
-- ✅ Production ready status
-- ⚠️ 3 optional improvements
-- 📊 9.5/10 quality score
+- ✅ **Zero Dependencies** - Uses only Python standard library
+- ✅ **Fast Analysis** - Analyzes files in seconds
+- ✅ **Detailed Reports** - Clear, actionable feedback
+- ✅ **Multiple Files** - Analyze entire directories
+- ✅ **Production Ready** - Deployment recommendations
+- ✅ **Easy to Use** - Simple command-line interface
 
 ---
 
 ## 📚 Documentation
 
-- **[USAGE.md](docs/USAGE.md)**: How to use the analyzer
-- **[METRICS.md](docs/METRICS.md)**: Understanding the metrics
-- **[EXAMPLES.md](examples/)**: Sample analyses
+- **[USAGE.md](docs/USAGE.md)** - Detailed usage guide with examples
+- **[METRICS.md](docs/METRICS.md)** - Explanation of all metrics and scoring
+- **[Example Reports](reports/)** - Sample analysis reports
+
+---
+
+## 🛠️ Use Cases
+
+1. **Pre-Deployment Review** - Check code quality before production
+2. **Code Review** - Automated analysis for pull requests
+3. **Learning Tool** - Understand Python best practices
+4. **Technical Debt** - Identify areas needing refactoring
+5. **Team Standards** - Ensure consistent code quality
+
+---
+
+## 📈 Example Analysis
+
+**Input**: `sample_code.py` (20 lines)
+
+**Output**:
+
+- Overall Score: 6.2/10
+- Issues Found: 4 (1 critical, 1 high, 2 low)
+- Recommendation: Fix critical security issue before deployment
+
+**Time**: < 1 second
 
 ---
 
 ## 🤝 Contributing
 
-This tool was developed for analyzing Google Drive to GCS migration scripts and can be extended for other Python projects.
+Contributions are welcome! This tool can be extended with:
+
+- Additional analysis rules
+- Custom scoring weights
+- Export formats (JSON, HTML, PDF)
+- CI/CD integration
+- IDE plugins
 
 ---
 
@@ -195,20 +230,13 @@ MIT License - Feel free to use and modify
 
 This analyzer was used to analyze a production Google Drive to GCS migration script:
 
-**Before Analysis**:
+**Results**:
 
-- 2 critical bugs
-- 4 high priority issues
-- Code quality: 8.2/10
-- Status: ❌ Not production ready
-
-**After Fixes**:
-
-- 0 bugs
-- Code quality: 9.5/10
-- Status: ✅ Production ready
-
-**Result**: Successfully deployed to production, handling 12TB+ data migration
+- Identified 2 critical bugs
+- Found 4 high-priority issues
+- Provided specific fixes for each issue
+- After fixes: Score improved from 8.2/10 to 9.5/10
+- Successfully deployed to production handling 12TB+ data
 
 ---
 

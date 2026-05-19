@@ -1,10 +1,7 @@
 # Example Python file for testing the analyzer
 
 def calculate_sum(numbers):
-    result = 0
-    for num in numbers:
-        result += num
-    return result
+    return sum(numbers)
 
 def process_data(data):
     try:

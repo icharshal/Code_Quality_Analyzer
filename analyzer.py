@@ -56,17 +56,17 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
         self.for_stack.pop()
 
     def visit_Call(self, node):
-        # Check for dangerous functions
-        if isinstance(node.func, ast.Name):
-            if node.func.id in ['eval', 'exec']:
+        # Check for dangerous functions and prints
+        func = node.func
+        if isinstance(func, ast.Name):
+            func_id = func.id
+            if func_id in {'eval', 'exec'}:
                 self.dangerous_calls.append(node)
-            elif node.func.id == 'print':
+            elif func_id == 'print':
                 self.print_calls.append(node)
-
         # Check for list comprehension opportunities
-        if self.for_stack and isinstance(node.func, ast.Attribute) and node.func.attr == 'append':
-            for for_node in self.for_stack:
-                self.for_loops_with_append.add(for_node)
+        elif self.for_stack and isinstance(func, ast.Attribute) and func.attr == 'append':
+            self.for_loops_with_append.update(self.for_stack)
 
         self.generic_visit(node)
 
@@ -104,7 +104,38 @@ class CodeQualityAnalyzer:
         }
         # Pre-compile secret detection regex for performance
         self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
-        
+        self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
+        self.duplication_found = False
+
+    def _perform_line_analysis(self):
+        """Perform all line-based analyses in a single pass"""
+        line_counts = {}
+        for i, line in enumerate(self.lines, 1):
+            stripped = line.strip()
+
+            # 1. Metrics collection
+            if not stripped:
+                self.metrics['blank_lines'] += 1
+            elif stripped.startswith('#'):
+                self.metrics['comment_lines'] += 1
+
+            # 2. Secret detection
+            if self.secret_re.search(line):
+                self.issues['critical'].append({
+                    'line': i,
+                    'issue': 'Hardcoded Secret',
+                    'description': 'Potential hardcoded secret found',
+                    'severity': 'CRITICAL',
+                    'suggestion': 'Move secrets to environment variables or a secure secret manager.'
+                })
+
+            # 3. Duplication check (with early-exit optimization)
+            if not self.duplication_found and stripped and not stripped.startswith('#') and len(stripped) > 20:
+                count = line_counts.get(stripped, 0) + 1
+                line_counts[stripped] = count
+                if count > 2:
+                    self.duplication_found = True
+
     def analyze(self, test_file: Optional[str] = None) -> Dict:
         """Run complete analysis"""
         print(f"🔍 Analyzing {self.file_name}...")
@@ -129,6 +160,9 @@ class CodeQualityAnalyzer:
         # Consolidate AST traversal
         self.visitor = CodeAnalysisVisitor()
         self.visitor.visit(self.tree)
+
+        # Perform consolidated line analysis
+        self._perform_line_analysis()
 
         # Run all analyses
         self._analyze_metrics()
@@ -205,15 +239,8 @@ class CodeQualityAnalyzer:
                 print(f"⚠️  Error analyzing coverage: {e}")
 
     def _analyze_metrics(self):
-        """Calculate basic code metrics"""
+        """Calculate basic code metrics using pre-calculated values"""
         self.metrics['lines_of_code'] = len(self.lines)
-        
-        for line in self.lines:
-            stripped = line.strip()
-            if not stripped:
-                self.metrics['blank_lines'] += 1
-            elif stripped.startswith('#'):
-                self.metrics['comment_lines'] += 1
         
         # Count functions and classes from visitor
         self.metrics['functions'] = len(self.visitor.functions)
@@ -313,20 +340,8 @@ class CodeQualityAnalyzer:
         self.scores['performance'] = max(0, score)
     
     def _analyze_security(self):
-        """Analyze security issues"""
-        score = 10.0
-        
-        # Check for hardcoded secrets using optimized regex
-        for i, line in enumerate(self.lines, 1):
-            if self.secret_re.search(line):
-                self.issues['critical'].append({
-                    'line': i,
-                    'issue': 'Hardcoded Secret',
-                    'description': 'Potential hardcoded secret found',
-                    'severity': 'CRITICAL',
-                    'suggestion': 'Move secrets to environment variables or a secure secret manager.'
-                })
-                score -= 3.0
+        """Analyze security issues using pre-calculated results"""
+        score = 10.0 - (len(self.issues['critical']) * 3.0)
         
         # Check for eval/exec usage from visitor
         for node in self.visitor.dangerous_calls:
@@ -408,22 +423,15 @@ class CodeQualityAnalyzer:
                     'issue': 'Naming Convention',
                     'description': f"Function '{node.name}' should use snake_case",
                     'severity': 'LOW',
-                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{re.sub(r'(?<!^)(?=[A-Z])', '_', node.name).lower()}')."
+                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.naming_re.sub('_', node.name).lower()}')."
                 })
                 score -= 0.3
         
         self.scores['best_practices'] = max(0, score)
     
     def _check_duplication(self) -> bool:
-        """Simple duplication check"""
-        # Check for repeated lines (simple heuristic)
-        line_counts = {}
-        for line in self.lines:
-            stripped = line.strip()
-            if stripped and not stripped.startswith('#') and len(stripped) > 20:
-                line_counts[stripped] = line_counts.get(stripped, 0) + 1
-        
-        return any(count > 2 for count in line_counts.values())
+        """Simple duplication check using pre-calculated results"""
+        return self.duplication_found
     
     def _calculate_scores(self):
         """Calculate overall quality score"""
@@ -499,16 +507,11 @@ class CodeQualityAnalyzer:
                 for issue in issues[:5]:
                     li = f"Line {issue['line']}: " if issue['line'] > 0 else ""
                     print(f"    - {c(li + issue['issue'], '1')}\n      {issue['description']}")
+                    if 'suggestion' in issue:
+                        print(f"      💡 Suggestion: {issue['suggestion']}")
                     if issue['line'] > 0 and 0 < issue['line'] <= len(self.lines):
                         snip = self.lines[issue['line']-1].strip()
                         if snip: print(f"      {c('> ' + snip, '2')}")
-                print(f"\n  {severity.upper()} ({len(issues)}):")
-                for issue in issues[:5]:  # Show first 5
-                    line_info = f"Line {issue['line']}: " if issue['line'] > 0 else ""
-                    print(f"    - {line_info}{issue['issue']}")
-                    print(f"      {issue['description']}")
-                    if 'suggestion' in issue:
-                        print(f"      💡 Suggestion: {issue['suggestion']}")
                 if len(issues) > 5:
                     print(f"    ... and {len(issues) - 5} more")
         

@@ -15,6 +15,9 @@ import argparse
 from typing import Dict, List, Optional
 import re
 import subprocess
+import json
+import urllib.request
+import urllib.error
 
 try:
     import coverage
@@ -102,6 +105,7 @@ class CodeQualityAnalyzer:
             'maintainability': 0,
             'best_practices': 0
         }
+        self.llm_review = None
         # Pre-compile secret detection regex for performance
         self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
         self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
@@ -110,12 +114,14 @@ class CodeQualityAnalyzer:
     def _perform_line_analysis(self):
         """Perform all line-based analyses in a single pass"""
         line_counts = {}
+
         for i, line in enumerate(self.lines, 1):
             stripped = line.strip()
 
             # 1. Metrics collection
             if not stripped:
                 self.metrics['blank_lines'] += 1
+                continue # Skip further analysis for blank lines
             elif stripped.startswith('#'):
                 self.metrics['comment_lines'] += 1
 
@@ -130,7 +136,7 @@ class CodeQualityAnalyzer:
                 })
 
             # 3. Duplication check (with early-exit optimization)
-            if not self.duplication_found and stripped and not stripped.startswith('#') and len(stripped) > 20:
+            if not self.duplication_found and not stripped.startswith('#') and len(stripped) > 20:
                 count = line_counts.get(stripped, 0) + 1
                 line_counts[stripped] = count
                 if count > 2:
@@ -184,7 +190,7 @@ class CodeQualityAnalyzer:
     
     def _run_coverage(self, test_file: str):
         """Run tests and collect coverage data"""
-        if not coverage:
+        if coverage is None:
             print("⚠️  Warning: 'coverage' package not installed. Skipping coverage analysis.")
             return
 
@@ -463,7 +469,8 @@ class CodeQualityAnalyzer:
             'category_scores': self.scores,
             'metrics': self.metrics,
             'issues': self.issues,
-            'total_issues': sum(len(issues) for issues in self.issues.values())
+            'total_issues': sum(len(issues) for issues in self.issues.values()),
+            'llm_review': self.llm_review
         }
     
     def print_report(self, report: Dict):
@@ -515,6 +522,12 @@ class CodeQualityAnalyzer:
                 if len(issues) > 5:
                     print(f"    ... and {len(issues) - 5} more")
         
+        # LLM Review
+        if report.get('llm_review'):
+            print("\n" + c("🤖 LLM CODE REVIEW", "1;35"))
+            print("-" * 20)
+            print(report['llm_review'])
+
         # Production Readiness
         print("\n" + c("="*80, "1;36"))
         if score >= 9.0 and not report['issues']['critical']:
@@ -585,6 +598,10 @@ class CodeQualityAnalyzer:
             for i, issue in enumerate(all_issues[:10]): # Top 10 recommendations
                 md += f"{i+1}. **{issue['issue']}**: {issue['suggestion']}\n"
 
+        if report.get('llm_review'):
+            md += "\n## 🤖 LLM Code Review\n\n"
+            md += report['llm_review'] + "\n"
+
         return md
 
     def generate_llm_prompt(self, report: Dict) -> str:
@@ -617,6 +634,36 @@ class CodeQualityAnalyzer:
         prompt += "4. Provide the final, improved version of the code.\n"
 
         return prompt
+
+    def get_llm_review(self, report: Dict, api_key: str, model: str = "gpt-4o", api_base: str = "https://api.openai.com/v1/chat/completions") -> Optional[str]:
+        """Fetch code review from an LLM API"""
+        print(f"🤖 Fetching LLM review using {model}...")
+
+        prompt = self.generate_llm_prompt(report)
+
+        data = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "You are a senior software engineer providing thorough code reviews."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.2
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Authorization": f"Bearer {api_key}"
+        }
+
+        try:
+            req = urllib.request.Request(api_base, data=json.dumps(data).encode('utf-8'), headers=headers)
+            with urllib.request.urlopen(req) as response:
+                result = json.loads(response.read().decode('utf-8'))
+                self.llm_review = result['choices'][0]['message']['content']
+                return self.llm_review
+        except Exception as e:
+            print(f"❌ Error fetching LLM review: {e}")
+            return None
     
     def _get_rating(self, score: float) -> str:
         """Get star rating"""
@@ -639,6 +686,10 @@ def main():
     parser.add_argument('--output', type=str, help='Output report file (optional)')
     parser.add_argument('--test-file', type=str, help='Path to test file for coverage analysis')
     parser.add_argument('--llm-prompt', action='store_true', help='Generate LLM enrichment prompt')
+    parser.add_argument('--llm-review', action='store_true', help='Perform actual LLM code review')
+    parser.add_argument('--api-key', type=str, help='API key for LLM service')
+    parser.add_argument('--model', type=str, default='gpt-4o', help='LLM model to use (default: gpt-4o)')
+    parser.add_argument('--api-base', type=str, default='https://api.openai.com/v1/chat/completions', help='API base URL')
     
     args = parser.parse_args()
     
@@ -668,6 +719,15 @@ def main():
     for file_path in files_to_analyze:
         analyzer = CodeQualityAnalyzer(file_path)
         report = analyzer.analyze(test_file=args.test_file)
+
+        if args.llm_review:
+            api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+            if not api_key:
+                print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
+            else:
+                analyzer.get_llm_review(report, api_key, args.model, args.api_base)
+                # Re-generate report with LLM review
+                report = analyzer.generate_report()
 
         if args.llm_prompt:
             print("\n" + "="*80)

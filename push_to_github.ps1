@@ -34,7 +34,7 @@ Write-Host "  1. Go to: https://github.com/settings/tokens"
 Write-Host "  2. Generate new token (classic)"
 Write-Host "  3. Select 'repo' scope"
 Write-Host "  4. Copy the token"
-Write-Host "  5. Run: git push https://YOUR_TOKEN@github.com/icharshal/Code_Quality_Analyzer.git main"
+Write-Host "  5. Run: git push origin main"
 Write-Host ""
 Write-Host "Option 3: Configure Git Credential Manager" -ForegroundColor Green
 Write-Host "  Run: git push origin main"
@@ -56,13 +56,9 @@ switch ($choice) {
     }
     "2" {
         Write-Host ""
-        Write-Host "Please enter your Personal Access Token: " -NoNewline -ForegroundColor Yellow
-        $token = Read-Host -AsSecureString
-        $tokenPlain = [Runtime.InteropServices.Marshal]::PtrToStringAuto([Runtime.InteropServices.Marshal]::SecureStringToBSTR($token))
-        
-        Write-Host ""
         Write-Host "Pushing to GitHub..." -ForegroundColor Green
-        git push "https://$tokenPlain@github.com/icharshal/Code_Quality_Analyzer.git" main
+        Write-Host "When prompted, enter your GitHub username and then paste your Personal Access Token as the password." -ForegroundColor Yellow
+        git push origin main
         
         if ($LASTEXITCODE -eq 0) {
             Write-Host ""
@@ -71,7 +67,7 @@ switch ($choice) {
         }
         else {
             Write-Host ""
-            Write-Host "❌ Push failed. Please check your token and try again." -ForegroundColor Red
+            Write-Host "❌ Push failed. Please ensure your token has 'repo' permissions." -ForegroundColor Red
         }
     }
     "3" {

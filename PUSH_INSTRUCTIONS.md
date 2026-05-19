@@ -51,12 +51,14 @@ The push failed because GitHub requires authentication. Here are your options:
 4. Select scope: `repo` (all checkboxes under repo)
 5. Click "Generate token"
 6. Copy the token (starts with `ghp_`)
-7. Run this command (replace YOUR_TOKEN):
+7. Run this command:
 
 ```powershell
 cd "c:\Users\harsh\OneDrive\Desktop\NC\Cloud Run\code 2\code 2\Code_Quality_Analyzer"
-git push https://YOUR_TOKEN@github.com/icharshal/Code_Quality_Analyzer.git main
+git push origin main
 ```
+
+*When prompted, enter your GitHub username and then paste your Personal Access Token as the password.*
 
 ### **Option 3: Git Credential Manager**
 

@@ -18,6 +18,55 @@ from datetime import datetime
 import re
 
 
+class CodeAnalysisVisitor(ast.NodeVisitor):
+    """AST visitor to collect metrics in a single pass"""
+    def __init__(self):
+        self.functions = []
+        self.classes_count = 0
+        self.except_handlers = []
+        self.try_nodes = []
+        self.for_loops_with_append = set()
+        self.for_stack = []
+        self.dangerous_calls = []
+        self.print_calls = []
+
+    def visit_FunctionDef(self, node):
+        self.functions.append(node)
+        self.generic_visit(node)
+
+    def visit_ClassDef(self, node):
+        self.classes_count += 1
+        self.generic_visit(node)
+
+    def visit_ExceptHandler(self, node):
+        self.except_handlers.append(node)
+        self.generic_visit(node)
+
+    def visit_Try(self, node):
+        self.try_nodes.append(node)
+        self.generic_visit(node)
+
+    def visit_For(self, node):
+        self.for_stack.append(node)
+        self.generic_visit(node)
+        self.for_stack.pop()
+
+    def visit_Call(self, node):
+        # Check for dangerous functions
+        if isinstance(node.func, ast.Name):
+            if node.func.id in ['eval', 'exec']:
+                self.dangerous_calls.append(node)
+            elif node.func.id == 'print':
+                self.print_calls.append(node)
+
+        # Check for list comprehension opportunities
+        if self.for_stack and isinstance(node.func, ast.Attribute) and node.func.attr == 'append':
+            for for_node in self.for_stack:
+                self.for_loops_with_append.add(for_node)
+
+        self.generic_visit(node)
+
+
 class CodeQualityAnalyzer:
     """Analyzes Python code for quality metrics and issues"""
     
@@ -48,6 +97,8 @@ class CodeQualityAnalyzer:
             'maintainability': 0,
             'best_practices': 0
         }
+        # Pre-compile secret detection regex for performance
+        self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
         
     def analyze(self) -> Dict:
         """Run complete analysis"""
@@ -69,6 +120,10 @@ class CodeQualityAnalyzer:
             })
             return self.generate_report()
         
+        # Consolidate AST traversal
+        self.visitor = CodeAnalysisVisitor()
+        self.visitor.visit(self.tree)
+
         # Run all analyses
         self._analyze_metrics()
         self._analyze_structure()
@@ -94,40 +149,36 @@ class CodeQualityAnalyzer:
             elif stripped.startswith('#'):
                 self.metrics['comment_lines'] += 1
         
-        # Count functions and classes
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef):
-                self.metrics['functions'] += 1
-            elif isinstance(node, ast.ClassDef):
-                self.metrics['classes'] += 1
+        # Count functions and classes from visitor
+        self.metrics['functions'] = len(self.visitor.functions)
+        self.metrics['classes'] = self.visitor.classes_count
     
     def _analyze_structure(self):
         """Analyze code structure"""
         score = 10.0
         
-        # Check function lengths
+        # Check function lengths from visitor
         function_lengths = []
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef):
-                length = node.end_lineno - node.lineno
-                function_lengths.append(length)
-                
-                if length > 100:
-                    self.issues['high'].append({
-                        'line': node.lineno,
-                        'issue': 'Long Function',
-                        'description': f"Function '{node.name}' is {length} lines (>100)",
-                        'severity': 'HIGH'
-                    })
-                    score -= 1.0
-                elif length > 50:
-                    self.issues['medium'].append({
-                        'line': node.lineno,
-                        'issue': 'Long Function',
-                        'description': f"Function '{node.name}' is {length} lines (>50)",
-                        'severity': 'MEDIUM'
-                    })
-                    score -= 0.5
+        for node in self.visitor.functions:
+            length = node.end_lineno - node.lineno
+            function_lengths.append(length)
+
+            if length > 100:
+                self.issues['high'].append({
+                    'line': node.lineno,
+                    'issue': 'Long Function',
+                    'description': f"Function '{node.name}' is {length} lines (>100)",
+                    'severity': 'HIGH'
+                })
+                score -= 1.0
+            elif length > 50:
+                self.issues['medium'].append({
+                    'line': node.lineno,
+                    'issue': 'Long Function',
+                    'description': f"Function '{node.name}' is {length} lines (>50)",
+                    'severity': 'MEDIUM'
+                })
+                score -= 0.5
         
         if function_lengths:
             self.metrics['max_function_length'] = max(function_lengths)
@@ -149,20 +200,19 @@ class CodeQualityAnalyzer:
         """Analyze error handling"""
         score = 10.0
         
-        # Check for bare except clauses
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.ExceptHandler):
-                if node.type is None:
-                    self.issues['high'].append({
-                        'line': node.lineno,
-                        'issue': 'Bare Except Clause',
-                        'description': 'Using bare except: catches all exceptions including system exits',
-                        'severity': 'HIGH'
-                    })
-                    score -= 2.0
+        # Check for bare except clauses from visitor
+        for node in self.visitor.except_handlers:
+            if node.type is None:
+                self.issues['high'].append({
+                    'line': node.lineno,
+                    'issue': 'Bare Except Clause',
+                    'description': 'Using bare except: catches all exceptions including system exits',
+                    'severity': 'HIGH'
+                })
+                score -= 2.0
         
-        # Check for try/except coverage
-        try_count = sum(1 for node in ast.walk(self.tree) if isinstance(node, ast.Try))
+        # Check for try/except coverage from visitor
+        try_count = len(self.visitor.try_nodes)
         if try_count == 0 and self.metrics['functions'] > 0:
             self.issues['medium'].append({
                 'line': 0,
@@ -178,23 +228,15 @@ class CodeQualityAnalyzer:
         """Analyze performance patterns"""
         score = 10.0
         
-        # Check for inefficient patterns
-        for node in ast.walk(self.tree):
-            # Check for list comprehension opportunities
-            if isinstance(node, ast.For):
-                # Simple heuristic: for loop with append
-                if any(isinstance(child, ast.Expr) and 
-                       isinstance(child.value, ast.Call) and
-                       isinstance(child.value.func, ast.Attribute) and
-                       child.value.func.attr == 'append'
-                       for child in ast.walk(node)):
-                    self.issues['low'].append({
-                        'line': node.lineno,
-                        'issue': 'List Comprehension Opportunity',
-                        'description': 'Consider using list comprehension',
-                        'severity': 'LOW'
-                    })
-                    score -= 0.3
+        # Check for list comprehension opportunities from visitor
+        for node in self.visitor.for_loops_with_append:
+            self.issues['low'].append({
+                'line': node.lineno,
+                'issue': 'List Comprehension Opportunity',
+                'description': 'Consider using list comprehension',
+                'severity': 'LOW'
+            })
+            score -= 0.3
         
         self.scores['performance'] = max(0, score)
     
@@ -202,37 +244,26 @@ class CodeQualityAnalyzer:
         """Analyze security issues"""
         score = 10.0
         
-        # Check for hardcoded secrets (simple patterns)
-        secret_patterns = [
-            r'password\s*=\s*["\'].*["\']',
-            r'api_key\s*=\s*["\'].*["\']',
-            r'secret\s*=\s*["\'].*["\']',
-            r'token\s*=\s*["\'].*["\']'
-        ]
-        
+        # Check for hardcoded secrets using optimized regex
         for i, line in enumerate(self.lines, 1):
-            for pattern in secret_patterns:
-                if re.search(pattern, line, re.IGNORECASE):
-                    self.issues['critical'].append({
-                        'line': i,
-                        'issue': 'Hardcoded Secret',
-                        'description': 'Potential hardcoded secret found',
-                        'severity': 'CRITICAL'
-                    })
-                    score -= 3.0
+            if self.secret_re.search(line):
+                self.issues['critical'].append({
+                    'line': i,
+                    'issue': 'Hardcoded Secret',
+                    'description': 'Potential hardcoded secret found',
+                    'severity': 'CRITICAL'
+                })
+                score -= 3.0
         
-        # Check for eval/exec usage
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name):
-                    if node.func.id in ['eval', 'exec']:
-                        self.issues['critical'].append({
-                            'line': node.lineno,
-                            'issue': 'Dangerous Function',
-                            'description': f'Use of {node.func.id}() is dangerous',
-                            'severity': 'CRITICAL'
-                        })
-                        score -= 3.0
+        # Check for eval/exec usage from visitor
+        for node in self.visitor.dangerous_calls:
+            self.issues['critical'].append({
+                'line': node.lineno,
+                'issue': 'Dangerous Function',
+                'description': f'Use of {node.func.id}() is dangerous',
+                'severity': 'CRITICAL'
+            })
+            score -= 3.0
         
         self.scores['security'] = max(0, score)
     
@@ -240,15 +271,13 @@ class CodeQualityAnalyzer:
         """Analyze code maintainability"""
         score = 10.0
         
-        # Check for docstrings
+        # Check for docstrings from visitor
         functions_with_docs = 0
-        total_functions = 0
+        total_functions = len(self.visitor.functions)
         
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef):
-                total_functions += 1
-                if ast.get_docstring(node):
-                    functions_with_docs += 1
+        for node in self.visitor.functions:
+            if ast.get_docstring(node):
+                functions_with_docs += 1
         
         if total_functions > 0:
             doc_coverage = (functions_with_docs / total_functions) * 100
@@ -261,12 +290,11 @@ class CodeQualityAnalyzer:
                 })
                 score -= 2.0
         
-        # Check for type hints
+        # Check for type hints from visitor
         functions_with_hints = 0
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef):
-                if node.returns or any(arg.annotation for arg in node.args.args):
-                    functions_with_hints += 1
+        for node in self.visitor.functions:
+            if node.returns or any(arg.annotation for arg in node.args.args):
+                functions_with_hints += 1
         
         if total_functions > 0:
             hint_coverage = (functions_with_hints / total_functions) * 100
@@ -285,29 +313,26 @@ class CodeQualityAnalyzer:
         """Analyze Python best practices"""
         score = 10.0
         
-        # Check for print statements (should use logging)
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.Call):
-                if isinstance(node.func, ast.Name) and node.func.id == 'print':
-                    self.issues['low'].append({
-                        'line': node.lineno,
-                        'issue': 'Print Statement',
-                        'description': 'Consider using logging instead of print()',
-                        'severity': 'LOW'
-                    })
-                    score -= 0.2
+        # Check for print statements from visitor
+        for node in self.visitor.print_calls:
+            self.issues['low'].append({
+                'line': node.lineno,
+                'issue': 'Print Statement',
+                'description': 'Consider using logging instead of print()',
+                'severity': 'LOW'
+            })
+            score -= 0.2
         
-        # Check for proper naming conventions
-        for node in ast.walk(self.tree):
-            if isinstance(node, ast.FunctionDef):
-                if not node.name.islower() and node.name != '__init__':
-                    self.issues['low'].append({
-                        'line': node.lineno,
-                        'issue': 'Naming Convention',
-                        'description': f"Function '{node.name}' should use snake_case",
-                        'severity': 'LOW'
-                    })
-                    score -= 0.3
+        # Check for proper naming conventions from visitor
+        for node in self.visitor.functions:
+            if not node.name.islower() and node.name != '__init__':
+                self.issues['low'].append({
+                    'line': node.lineno,
+                    'issue': 'Naming Convention',
+                    'description': f"Function '{node.name}' should use snake_case",
+                    'severity': 'LOW'
+                })
+                score -= 0.3
         
         self.scores['best_practices'] = max(0, score)
     

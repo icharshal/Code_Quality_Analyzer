@@ -460,19 +460,24 @@ class CodeQualityAnalyzer:
     
     def print_report(self, report: Dict):
         """Print formatted report"""
-        print("\n" + "="*80)
-        print(f"📊 CODE QUALITY REPORT - {report['file']}")
-        print("="*80)
+        use_color = sys.stdout.isatty()
+        c = lambda t, s: f"\033[{s}m{t}\033[0m" if use_color else t
+
+        print("\n" + c("="*80, "1;36"))
+        print(c(f"📊 CODE QUALITY REPORT - {report['file']}", "1;36"))
+        print(c("="*80, "1;36"))
         
         # Overall Score
         score = report['overall_score']
         rating = self._get_rating(score)
-        print(f"\n🎯 Overall Quality Score: {score}/10 {rating}")
+        sc = "92" if score >= 9 else ("93" if score >= 7 else "91")
+        print(f"\n🎯 Overall Quality Score: {c(f'{score}/10', '1;' + sc)} {rating}")
         
         # Category Scores
-        print("\n📈 Category Scores:")
-        for category, score in report['category_scores'].items():
-            print(f"  - {category.replace('_', ' ').title()}: {score:.1f}/10")
+        print(f"\n{c('📈 Category Scores:', '1')}")
+        for cat, cs in report['category_scores'].items():
+            csc = "92" if cs >= 9 else ("93" if cs >= 7 else "91")
+            print(f"  - {cat.replace('_', ' ').title()}: {c(f'{cs:.1f}/10', csc)}")
         
         # Metrics
         print("\n📏 Code Metrics:")
@@ -485,10 +490,18 @@ class CodeQualityAnalyzer:
             print(f"  - Test Coverage: {report['metrics']['coverage']:.1f}%")
         
         # Issues
-        print(f"\n🐛 Issues Found: {report['total_issues']}")
+        sev_c = {'critical': '1;91', 'high': '91', 'medium': '93', 'low': '96'}
+        print(f"\n{c(f'🐛 Issues Found: {report['total_issues']}', '1')}")
         for severity in ['critical', 'high', 'medium', 'low']:
             issues = report['issues'][severity]
             if issues:
+                print(f"\n  {c(severity.upper(), sev_c[severity])} ({len(issues)}):")
+                for issue in issues[:5]:
+                    li = f"Line {issue['line']}: " if issue['line'] > 0 else ""
+                    print(f"    - {c(li + issue['issue'], '1')}\n      {issue['description']}")
+                    if issue['line'] > 0 and 0 < issue['line'] <= len(self.lines):
+                        snip = self.lines[issue['line']-1].strip()
+                        if snip: print(f"      {c('> ' + snip, '2')}")
                 print(f"\n  {severity.upper()} ({len(issues)}):")
                 for issue in issues[:5]:  # Show first 5
                     line_info = f"Line {issue['line']}: " if issue['line'] > 0 else ""
@@ -500,13 +513,13 @@ class CodeQualityAnalyzer:
                     print(f"    ... and {len(issues) - 5} more")
         
         # Production Readiness
-        print("\n" + "="*80)
-        if score >= 9.0 and report['issues']['critical'] == []:
-            print("✅ PRODUCTION READY - Excellent code quality!")
-        elif score >= 7.0 and report['issues']['critical'] == []:
-            print("✅ PRODUCTION READY - Good code quality with minor improvements needed")
+        print("\n" + c("="*80, "1;36"))
+        if score >= 9.0 and not report['issues']['critical']:
+            print(c("✅ PRODUCTION READY - Excellent code quality!", "1;92"))
+        elif score >= 7.0 and not report['issues']['critical']:
+            print(c("✅ PRODUCTION READY - Good code quality with minor improvements needed", "92"))
         elif report['issues']['critical']:
-            print("❌ NOT PRODUCTION READY - Critical issues must be fixed")
+            print(c("❌ NOT PRODUCTION READY - Critical issues must be fixed", "1;91"))
         else:
             print("⚠️  NEEDS IMPROVEMENT - Significant refactoring recommended")
         print("="*80 + "\n")

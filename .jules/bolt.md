@@ -9,3 +9,7 @@
 ## 2025-05-15 - [Regex Search Optimization]
 **Learning:** Searching for multiple independent regex patterns per line in a loop is expensive.
 **Action:** Compile multiple patterns into a single regex object using the `|` operator and `re.compile()`. This ensures the regex engine only needs to scan each line once.
+
+## 2025-05-15 - Optimization of Line Analysis
+**Learning:** For large file processing, a single-pass iteration with minimal string allocations is the most efficient approach. Consolidating metrics collection, secret detection, and duplication checks into one loop—while using early \`continue\` for blank lines—minimizes redundant work.
+**Action:** Prioritize single-pass analysis over multiple passes with built-in functions like \`sum()\` when the per-element processing is already complex or requires multiple checks.

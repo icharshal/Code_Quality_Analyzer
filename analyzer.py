@@ -122,7 +122,9 @@ class CodeQualityAnalyzer:
             if not stripped:
                 self.metrics['blank_lines'] += 1
                 continue # Skip further analysis for blank lines
-            elif stripped.startswith('#'):
+
+            is_comment = stripped.startswith('#')
+            if is_comment:
                 self.metrics['comment_lines'] += 1
 
             # 2. Secret detection
@@ -136,7 +138,7 @@ class CodeQualityAnalyzer:
                 })
 
             # 3. Duplication check (with early-exit optimization)
-            if not self.duplication_found and not stripped.startswith('#') and len(stripped) > 20:
+            if not self.duplication_found and not is_comment and len(stripped) > 20:
                 count = line_counts.get(stripped, 0) + 1
                 line_counts[stripped] = count
                 if count > 2:

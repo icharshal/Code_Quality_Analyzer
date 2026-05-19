@@ -13,3 +13,7 @@
 ## 2025-05-15 - Optimization of Line Analysis
 **Learning:** For large file processing, a single-pass iteration with minimal string allocations is the most efficient approach. Consolidating metrics collection, secret detection, and duplication checks into one loop—while using early \`continue\` for blank lines—minimizes redundant work.
 **Action:** Prioritize single-pass analysis over multiple passes with built-in functions like \`sum()\` when the per-element processing is already complex or requires multiple checks.
+
+## 2026-05-19 - [Consolidated String Checks]
+**Learning:** Redundant string operations like `startswith()` inside high-frequency loops can add measurable overhead.
+**Action:** Store the result of `line.startswith('#')` in a boolean variable and reuse it for both metrics collection and duplication logic within the single-pass line analyzer.

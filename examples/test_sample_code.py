@@ -1,4 +1,10 @@
 import unittest
+import sys
+import os
+
+# Add the examples directory to sys.path to allow importing sample_code
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+
 from sample_code import calculate_sum
 
 class TestCalculateSum(unittest.TestCase):

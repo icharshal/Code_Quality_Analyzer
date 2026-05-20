@@ -29,6 +29,8 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
     """AST visitor to collect metrics in a single pass"""
     def __init__(self):
         self.functions = []
+        self.functions_with_docs = 0
+        self.functions_with_hints = 0
         self.classes_count = 0
         self.except_handlers = []
         self.try_nodes = []
@@ -39,6 +41,10 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
 
     def visit_FunctionDef(self, node):
         self.functions.append(node)
+        if ast.get_docstring(node):
+            self.functions_with_docs += 1
+        if node.returns or any(arg.annotation for arg in node.args.args):
+            self.functions_with_hints += 1
         self.generic_visit(node)
 
     def visit_ClassDef(self, node):
@@ -370,7 +376,7 @@ class CodeQualityAnalyzer:
         
         # Check for docstrings from visitor
         total_functions = len(self.visitor.functions)
-        functions_with_docs = sum(1 for node in self.visitor.functions if ast.get_docstring(node))
+        functions_with_docs = self.visitor.functions_with_docs
         
         if total_functions > 0:
             doc_coverage = (functions_with_docs / total_functions) * 100
@@ -385,10 +391,7 @@ class CodeQualityAnalyzer:
                 score -= 2.0
         
         # Check for type hints from visitor
-        functions_with_hints = sum(
-            1 for node in self.visitor.functions
-            if node.returns or any(arg.annotation for arg in node.args.args)
-        )
+        functions_with_hints = self.visitor.functions_with_hints
         
         if total_functions > 0:
             hint_coverage = (functions_with_hints / total_functions) * 100
@@ -655,7 +658,7 @@ class CodeQualityAnalyzer:
 
         try:
             req = urllib.request.Request(api_base, data=json.dumps(data).encode('utf-8'), headers=headers)
-            with urllib.request.urlopen(req) as response:
+            with urllib.request.urlopen(req, timeout=30) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 self.llm_review = result['choices'][0]['message']['content']
                 return self.llm_review
@@ -707,13 +710,14 @@ def main():
         if not os.path.exists(args.directory):
             print(f"❌ Error: Directory not found: {args.directory}")
             sys.exit(1)
-        for root, dirs, files in os.walk(args.directory):
+        for root, _, files in os.walk(args.directory):
             for file in files:
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
     
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
     
+    reports = []
     for file_path in files_to_analyze:
         analyzer = CodeQualityAnalyzer(file_path)
         report = analyzer.analyze(test_file=args.test_file)
@@ -727,6 +731,8 @@ def main():
                 # Re-generate report with LLM review
                 report = analyzer.generate_report()
 
+        reports.append((analyzer, report))
+
         if args.llm_prompt:
             print("\n" + "="*80)
             print("🤖 LLM ENRICHMENT PROMPT")
@@ -736,11 +742,16 @@ def main():
         else:
             analyzer.print_report(report)
 
-        if args.output:
-            md_report = analyzer.generate_markdown_report(report)
-            with open(args.output, 'w', encoding='utf-8') as f:
-                f.write(md_report)
-            print(f"📝 Report saved to {args.output}")
+    if args.output and reports:
+        markdown_reports = [
+            analyzer.generate_markdown_report(report)
+            for analyzer, report in reports
+        ]
+        full_report = "\n\n---\n\n".join(markdown_reports)
+
+        with open(args.output, 'w', encoding='utf-8') as f:
+            f.write(full_report)
+        print(f"📝 Combined report saved to {args.output}")
 
 
 if __name__ == "__main__":

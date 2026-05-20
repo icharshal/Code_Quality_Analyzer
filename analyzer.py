@@ -122,7 +122,9 @@ class CodeQualityAnalyzer:
             if not stripped:
                 self.metrics['blank_lines'] += 1
                 continue # Skip further analysis for blank lines
-            elif stripped.startswith('#'):
+
+            is_comment = stripped.startswith('#')
+            if is_comment:
                 self.metrics['comment_lines'] += 1
 
             # 2. Secret detection
@@ -136,7 +138,7 @@ class CodeQualityAnalyzer:
                 })
 
             # 3. Duplication check (with early-exit optimization)
-            if not self.duplication_found and not stripped.startswith('#') and len(stripped) > 20:
+            if not self.duplication_found and not is_comment and len(stripped) > 20:
                 count = line_counts.get(stripped, 0) + 1
                 line_counts[stripped] = count
                 if count > 2:
@@ -367,12 +369,8 @@ class CodeQualityAnalyzer:
         score = 10.0
         
         # Check for docstrings from visitor
-        functions_with_docs = 0
         total_functions = len(self.visitor.functions)
-        
-        for node in self.visitor.functions:
-            if ast.get_docstring(node):
-                functions_with_docs += 1
+        functions_with_docs = sum(1 for node in self.visitor.functions if ast.get_docstring(node))
         
         if total_functions > 0:
             doc_coverage = (functions_with_docs / total_functions) * 100
@@ -387,10 +385,10 @@ class CodeQualityAnalyzer:
                 score -= 2.0
         
         # Check for type hints from visitor
-        functions_with_hints = 0
-        for node in self.visitor.functions:
-            if node.returns or any(arg.annotation for arg in node.args.args):
-                functions_with_hints += 1
+        functions_with_hints = sum(
+            1 for node in self.visitor.functions
+            if node.returns or any(arg.annotation for arg in node.args.args)
+        )
         
         if total_functions > 0:
             hint_coverage = (functions_with_hints / total_functions) * 100

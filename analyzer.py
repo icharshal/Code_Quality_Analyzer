@@ -64,12 +64,33 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
         if isinstance(func, ast.Name):
             func_id = func.id
             if func_id in {'eval', 'exec'}:
-                self.dangerous_calls.append(node)
+                self.dangerous_calls.append((node, func_id))
             elif func_id == 'print':
                 self.print_calls.append(node)
-        # Check for list comprehension opportunities
-        elif self.for_stack and isinstance(func, ast.Attribute) and func.attr == 'append':
-            self.for_loops_with_append.update(self.for_stack)
+        elif isinstance(func, ast.Attribute):
+            if isinstance(func.value, ast.Name):
+                module = func.value.id
+                method = func.attr
+                full_name = f"{module}.{method}"
+
+                if module == 'os' and method in {'system', 'popen', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'}:
+                    self.dangerous_calls.append((node, full_name))
+                elif module == 'subprocess' and method in {'run', 'call', 'check_call', 'check_output', 'Popen'}:
+                    # Check for shell=True
+                    for keyword in node.keywords:
+                        if keyword.arg == 'shell' and (
+                            (isinstance(keyword.value, ast.Constant) and keyword.value.value is True) or
+                            (isinstance(keyword.value, ast.NameConstant) and hasattr(keyword.value, 'value') and keyword.value.value is True)
+                        ):
+                            self.dangerous_calls.append((node, full_name))
+                elif module == 'pickle' and method in {'load', 'loads'}:
+                    self.dangerous_calls.append((node, full_name))
+                elif module == 'marshal' and method in {'load', 'loads'}:
+                    self.dangerous_calls.append((node, full_name))
+
+            # Check for list comprehension opportunities
+            if func.attr == 'append' and self.for_stack:
+                self.for_loops_with_append.update(self.for_stack)
 
         self.generic_visit(node)
 
@@ -351,14 +372,26 @@ class CodeQualityAnalyzer:
         """Analyze security issues using pre-calculated results"""
         score = 10.0 - (len(self.issues['critical']) * 3.0)
         
-        # Check for eval/exec usage from visitor
-        for node in self.visitor.dangerous_calls:
+        # Check for dangerous function usage from visitor
+        for node, func_name in self.visitor.dangerous_calls:
+            description = f'Use of {func_name}() is dangerous'
+            suggestion = f"Avoid using {func_name}()."
+
+            if func_name in {'eval', 'exec'}:
+                suggestion += " Use safer alternatives like ast.literal_eval() if needed."
+            elif 'os.' in func_name or 'subprocess.' in func_name:
+                description += " (potential shell injection)"
+                suggestion += " Use the subprocess module with shell=False and pass arguments as a list."
+            elif 'pickle.' in func_name or 'marshal.' in func_name:
+                description += " (insecure deserialization)"
+                suggestion += " Use safer formats like JSON for untrusted data."
+
             self.issues['critical'].append({
                 'line': node.lineno,
                 'issue': 'Dangerous Function',
-                'description': f'Use of {node.func.id}() is dangerous',
+                'description': description,
                 'severity': 'CRITICAL',
-                'suggestion': f"Avoid using {node.func.id}(). Use safer alternatives like ast.literal_eval() if needed."
+                'suggestion': suggestion
             })
             score -= 3.0
         
@@ -655,7 +688,8 @@ class CodeQualityAnalyzer:
 
         try:
             req = urllib.request.Request(api_base, data=json.dumps(data).encode('utf-8'), headers=headers)
-            with urllib.request.urlopen(req) as response:
+            # Use a timeout to prevent potential DoS from hanging connections
+            with urllib.request.urlopen(req, timeout=30) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 self.llm_review = result['choices'][0]['message']['content']
                 return self.llm_review

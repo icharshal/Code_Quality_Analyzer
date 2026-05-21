@@ -12,7 +12,7 @@ import ast
 import os
 import sys
 import argparse
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import re
 import subprocess
 import json

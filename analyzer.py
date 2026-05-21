@@ -12,7 +12,7 @@ import ast
 import os
 import sys
 import argparse
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import re
 import subprocess
 import json
@@ -70,12 +70,39 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
         if isinstance(func, ast.Name):
             func_id = func.id
             if func_id in {'eval', 'exec'}:
-                self.dangerous_calls.append(node)
+                self.dangerous_calls.append((node, func_id))
             elif func_id == 'print':
                 self.print_calls.append(node)
-        # Check for list comprehension opportunities
-        elif self.for_stack and isinstance(func, ast.Attribute) and func.attr == 'append':
-            self.for_loops_with_append.update(self.for_stack)
+        elif isinstance(func, ast.Attribute):
+            if isinstance(func.value, ast.Name):
+                module = func.value.id
+                method = func.attr
+                full_name = f"{module}.{method}"
+
+                if module == 'os' and method in {'system', 'popen', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'}:
+                    self.dangerous_calls.append((node, full_name))
+                elif module == 'subprocess' and method in {'run', 'call', 'check_call', 'check_output', 'Popen'}:
+                    # Check for shell=True
+                    for keyword in node.keywords:
+                        if keyword.arg == 'shell':
+                            val = keyword.value
+                            is_true = False
+                            if isinstance(val, ast.Constant) and val.value is True:
+                                is_true = True
+                            # Support for older Python versions if needed, but avoid direct reference to avoid DeprecationWarning if possible
+                            elif type(val).__name__ == 'NameConstant' and getattr(val, 'value', None) is True:
+                                is_true = True
+
+                            if is_true:
+                                self.dangerous_calls.append((node, full_name))
+                elif module == 'pickle' and method in {'load', 'loads'}:
+                    self.dangerous_calls.append((node, full_name))
+                elif module == 'marshal' and method in {'load', 'loads'}:
+                    self.dangerous_calls.append((node, full_name))
+
+            # Check for list comprehension opportunities
+            if func.attr == 'append' and self.for_stack:
+                self.for_loops_with_append.update(self.for_stack)
 
         self.generic_visit(node)
 
@@ -202,55 +229,48 @@ class CodeQualityAnalyzer:
             print("⚠️  Warning: 'coverage' package not installed. Skipping coverage analysis.")
             return
 
-        print(f"🧪 Running coverage for {test_file}...")
+        if not os.path.isfile(test_file):
+            print(f"⚠️  Warning: Test file not found: {test_file}")
+            return
 
+        print(f"🧪 Running coverage for {test_file}...")
         cov = coverage.Coverage(source=[os.path.dirname(self.file_path)])
         cov.start()
 
         try:
-            # Run the test file as a script
-            # We use subprocess to run it in a separate process to avoid conflicts
-            # but then we won't get the coverage in this process easily.
-            # Actually, we can run it using exec() or similar, but subprocess is safer.
-            # Coverage can also be run via subprocess.
-
-            # Resetting for simplicity: run coverage in a separate process and read output
-            # Or use the API if we can run the test file here.
-
-            # Simple approach: use the coverage API to run the test file
-            import unittest
-            loader = unittest.TestLoader()
-            if os.path.isfile(test_file):
-                # If it's a file, we might need to handle imports
-                # Adding current dir to path
-                sys.path.append(os.getcwd())
-                sys.path.append(os.path.dirname(os.path.abspath(test_file)))
-
-                module_name = os.path.basename(test_file).replace('.py', '')
-                try:
-                    import importlib.util
-                    spec = importlib.util.spec_from_file_location(module_name, test_file)
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-                    suite = loader.loadTestsFromModule(module)
-                    unittest.TextTestRunner(verbosity=0).run(suite)
-                except Exception as e:
-                    print(f"⚠️  Error running tests: {e}")
-
+            self._execute_tests(test_file)
         finally:
             cov.stop()
             cov.save()
+            self._collect_coverage_data(cov)
 
-            # Get coverage for the specific file
-            try:
-                # coverage report doesn't easily return a dict, but we can use the API
-                # Data is in .coverage file now
-                # Re-load if needed, but it should be in cov
-                analysis = cov._analyze(self.file_path)
-                # analysis.numbers is a namedtuple: (total_statements, executed_statements, excluded_statements, missing_statements, pc_covered, pc_covered_str)
-                self.metrics['coverage'] = analysis.numbers.pc_covered
-            except Exception as e:
-                print(f"⚠️  Error analyzing coverage: {e}")
+    def _execute_tests(self, test_file: str):
+        """Helper to execute tests for coverage"""
+        import unittest
+        import importlib.util
+
+        loader = unittest.TestLoader()
+        sys.path.append(os.getcwd())
+        sys.path.append(os.path.dirname(os.path.abspath(test_file)))
+
+        module_name = os.path.basename(test_file).replace('.py', '')
+        try:
+            spec = importlib.util.spec_from_file_location(module_name, test_file)
+            if spec and spec.loader:
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                suite = loader.loadTestsFromModule(module)
+                unittest.TextTestRunner(verbosity=0).run(suite)
+        except Exception as e:
+            print(f"⚠️  Error running tests: {e}")
+
+    def _collect_coverage_data(self, cov):
+        """Helper to collect coverage data from coverage object"""
+        try:
+            analysis = cov._analyze(self.file_path)
+            self.metrics['coverage'] = analysis.numbers.pc_covered
+        except Exception as e:
+            print(f"⚠️  Error analyzing coverage: {e}")
 
     def _analyze_metrics(self):
         """Calculate basic code metrics using pre-calculated values"""
@@ -357,14 +377,26 @@ class CodeQualityAnalyzer:
         """Analyze security issues using pre-calculated results"""
         score = 10.0 - (len(self.issues['critical']) * 3.0)
         
-        # Check for eval/exec usage from visitor
-        for node in self.visitor.dangerous_calls:
+        # Check for dangerous function usage from visitor
+        for node, func_name in self.visitor.dangerous_calls:
+            description = f'Use of {func_name}() is dangerous'
+            suggestion = f"Avoid using {func_name}()."
+
+            if func_name in {'eval', 'exec'}:
+                suggestion += " Use safer alternatives like ast.literal_eval() if needed."
+            elif 'os.' in func_name or 'subprocess.' in func_name:
+                description += " (potential shell injection)"
+                suggestion += " Use the subprocess module with shell=False and pass arguments as a list."
+            elif 'pickle.' in func_name or 'marshal.' in func_name:
+                description += " (insecure deserialization)"
+                suggestion += " Use safer formats like JSON for untrusted data."
+
             self.issues['critical'].append({
                 'line': node.lineno,
                 'issue': 'Dangerous Function',
-                'description': f'Use of {node.func.id}() is dangerous',
+                'description': description,
                 'severity': 'CRITICAL',
-                'suggestion': f"Avoid using {node.func.id}(). Use safer alternatives like ast.literal_eval() if needed."
+                'suggestion': suggestion
             })
             score -= 3.0
         
@@ -479,33 +511,46 @@ class CodeQualityAnalyzer:
         use_color = sys.stdout.isatty()
         c = lambda t, s: f"\033[{s}m{t}\033[0m" if use_color else t
 
+        self._print_header(report, c)
+        self._print_scores(report, c)
+        self._print_metrics(report)
+        self._print_issues(report, c)
+
+        if report.get('llm_review'):
+            print("\n" + c("🤖 LLM CODE REVIEW", "1;35"))
+            print("-" * 20)
+            print(report['llm_review'])
+
+        self._print_footer(report, c)
+
+    def _print_header(self, report: Dict, c):
         print("\n" + c("="*80, "1;36"))
         print(c(f"📊 CODE QUALITY REPORT - {report['file']}", "1;36"))
         print(c("="*80, "1;36"))
-        
-        # Overall Score
+
+    def _print_scores(self, report: Dict, c):
         score = report['overall_score']
         rating = self._get_rating(score)
         sc = "92" if score >= 9 else ("93" if score >= 7 else "91")
         print(f"\n🎯 Overall Quality Score: {c(f'{score}/10', '1;' + sc)} {rating}")
         
-        # Category Scores
         print(f"\n{c('📈 Category Scores:', '1')}")
         for cat, cs in report['category_scores'].items():
             csc = "92" if cs >= 9 else ("93" if cs >= 7 else "91")
             print(f"  - {cat.replace('_', ' ').title()}: {c(f'{cs:.1f}/10', csc)}")
-        
-        # Metrics
+
+    def _print_metrics(self, report: Dict):
         print("\n📏 Code Metrics:")
-        print(f"  - Lines of Code: {report['metrics']['lines_of_code']}")
-        print(f"  - Functions: {report['metrics']['functions']}")
-        print(f"  - Classes: {report['metrics']['classes']}")
-        if report['metrics']['avg_function_length'] > 0:
-            print(f"  - Avg Function Length: {report['metrics']['avg_function_length']:.1f} lines")
-        if report['metrics']['coverage'] is not None:
-            print(f"  - Test Coverage: {report['metrics']['coverage']:.1f}%")
-        
-        # Issues
+        metrics = report['metrics']
+        print(f"  - Lines of Code: {metrics['lines_of_code']}")
+        print(f"  - Functions: {metrics['functions']}")
+        print(f"  - Classes: {metrics['classes']}")
+        if metrics['avg_function_length'] > 0:
+            print(f"  - Avg Function Length: {metrics['avg_function_length']:.1f} lines")
+        if metrics['coverage'] is not None:
+            print(f"  - Test Coverage: {metrics['coverage']:.1f}%")
+
+    def _print_issues(self, report: Dict, c):
         sev_c = {'critical': '1;91', 'high': '91', 'medium': '93', 'low': '96'}
         print(f"\n{c(f'🐛 Issues Found: {report['total_issues']}', '1')}")
         for severity in ['critical', 'high', 'medium', 'low']:
@@ -522,14 +567,9 @@ class CodeQualityAnalyzer:
                         if snip: print(f"      {c('> ' + snip, '2')}")
                 if len(issues) > 5:
                     print(f"    ... and {len(issues) - 5} more")
-        
-        # LLM Review
-        if report.get('llm_review'):
-            print("\n" + c("🤖 LLM CODE REVIEW", "1;35"))
-            print("-" * 20)
-            print(report['llm_review'])
 
-        # Production Readiness
+    def _print_footer(self, report: Dict, c):
+        score = report['overall_score']
         print("\n" + c("="*80, "1;36"))
         if score >= 9.0 and not report['issues']['critical']:
             print(c("✅ PRODUCTION READY - Excellent code quality!", "1;92"))
@@ -543,11 +583,23 @@ class CodeQualityAnalyzer:
 
     def generate_markdown_report(self, report: Dict) -> str:
         """Generate detailed Markdown report"""
-        md = f"# 📊 Code Quality Report - {report['file']}\n\n"
+        sections = [
+            f"# 📊 Code Quality Report - {report['file']}\n",
+            self._gen_md_summary(report),
+            self._gen_md_metrics(report),
+            self._gen_md_issues(report),
+            self._gen_md_recommendations(report)
+        ]
 
+        if report.get('llm_review'):
+            sections.append(f"\n## 🤖 LLM Code Review\n\n{report['llm_review']}\n")
+
+        return "\n".join(sections)
+
+    def _gen_md_summary(self, report: Dict) -> str:
         score = report['overall_score']
         rating = self._get_rating(score)
-        md += f"## 🎯 Executive Summary\n\n"
+        md = f"## 🎯 Executive Summary\n\n"
         md += f"| Category | Rating | Score |\n"
         md += f"|----------|--------|-------|\n"
         md += f"| **Overall Quality** | {rating} | {score}/10 |\n"
@@ -555,26 +607,30 @@ class CodeQualityAnalyzer:
             md += f"| {cat.replace('_', ' ').title()} | {self._get_rating(s)} | {s:.1f}/10 |\n"
 
         md += f"\n**Verdict**: "
-        if score >= 9.0 and report['issues']['critical'] == []:
-            md += "✅ **PRODUCTION READY** - Excellent code quality!\n\n"
-        elif score >= 7.0 and report['issues']['critical'] == []:
-            md += "✅ **PRODUCTION READY** - Good code quality with minor improvements needed\n\n"
+        if score >= 9.0 and not report['issues']['critical']:
+            md += "✅ **PRODUCTION READY** - Excellent code quality!\n"
+        elif score >= 7.0 and not report['issues']['critical']:
+            md += "✅ **PRODUCTION READY** - Good code quality with minor improvements needed\n"
         elif report['issues']['critical']:
-            md += "❌ **NOT PRODUCTION READY** - Critical issues must be fixed\n\n"
+            md += "❌ **NOT PRODUCTION READY** - Critical issues must be fixed\n"
         else:
-            md += "⚠️  **NEEDS IMPROVEMENT** - Significant refactoring recommended\n\n"
+            md += "⚠️  **NEEDS IMPROVEMENT** - Significant refactoring recommended\n"
+        return md
 
-        md += "## 📏 Code Metrics\n\n"
-        md += f"- **Lines of Code**: {report['metrics']['lines_of_code']}\n"
-        md += f"- **Functions**: {report['metrics']['functions']}\n"
-        md += f"- **Classes**: {report['metrics']['classes']}\n"
-        if report['metrics']['avg_function_length'] > 0:
-            md += f"- **Avg Function Length**: {report['metrics']['avg_function_length']:.1f} lines\n"
-        if report['metrics']['coverage'] is not None:
-            md += f"- **Test Coverage**: {report['metrics']['coverage']:.1f}%\n"
+    def _gen_md_metrics(self, report: Dict) -> str:
+        metrics = report['metrics']
+        md = "## 📏 Code Metrics\n\n"
+        md += f"- **Lines of Code**: {metrics['lines_of_code']}\n"
+        md += f"- **Functions**: {metrics['functions']}\n"
+        md += f"- **Classes**: {metrics['classes']}\n"
+        if metrics['avg_function_length'] > 0:
+            md += f"- **Avg Function Length**: {metrics['avg_function_length']:.1f} lines\n"
+        if metrics['coverage'] is not None:
+            md += f"- **Test Coverage**: {metrics['coverage']:.1f}%\n"
+        return md
 
-        md += f"\n## 🐛 Issues Found ({report['total_issues']})\n\n"
-
+    def _gen_md_issues(self, report: Dict) -> str:
+        md = f"## 🐛 Issues Found ({report['total_issues']})\n\n"
         for severity in ['critical', 'high', 'medium', 'low']:
             issues = report['issues'][severity]
             if issues:
@@ -586,8 +642,10 @@ class CodeQualityAnalyzer:
                     if 'suggestion' in issue:
                         md += f"  - *Fix*: {issue['suggestion']}\n"
                 md += "\n"
+        return md
 
-        md += "## 💡 Recommendations\n\n"
+    def _gen_md_recommendations(self, report: Dict) -> str:
+        md = "## 💡 Recommendations\n\n"
         all_issues = []
         for s in ['critical', 'high', 'medium', 'low']:
             all_issues.extend(report['issues'][s])
@@ -595,14 +653,8 @@ class CodeQualityAnalyzer:
         if not all_issues:
             md += "Keep up the great work! No major issues found.\n"
         else:
-            # Sort by severity
-            for i, issue in enumerate(all_issues[:10]): # Top 10 recommendations
+            for i, issue in enumerate(all_issues[:10]):
                 md += f"{i+1}. **{issue['issue']}**: {issue['suggestion']}\n"
-
-        if report.get('llm_review'):
-            md += "\n## 🤖 LLM Code Review\n\n"
-            md += report['llm_review'] + "\n"
-
         return md
 
     def generate_llm_prompt(self, report: Dict) -> str:
@@ -680,7 +732,7 @@ class CodeQualityAnalyzer:
             return "⭐☆☆☆☆"
 
 
-def main():
+def parse_args():
     parser = argparse.ArgumentParser(description='Analyze Python code quality')
     parser.add_argument('--file', type=str, help='Path to Python file to analyze')
     parser.add_argument('--directory', type=str, help='Path to directory to analyze')
@@ -691,15 +743,10 @@ def main():
     parser.add_argument('--api-key', type=str, help='API key for LLM service')
     parser.add_argument('--model', type=str, default='gpt-4o', help='LLM model to use (default: gpt-4o)')
     parser.add_argument('--api-base', type=str, default='https://api.openai.com/v1/chat/completions', help='API base URL')
-    
-    args = parser.parse_args()
-    
-    if not args.file and not args.directory:
-        parser.print_help()
-        sys.exit(1)
-    
+    return parser.parse_args(), parser
+
+def get_files_to_analyze(args):
     files_to_analyze = []
-    
     if args.file:
         if not os.path.exists(args.file):
             print(f"❌ Error: File not found: {args.file}")
@@ -740,7 +787,31 @@ def main():
             print(analyzer.generate_llm_prompt(report))
             print("="*80 + "\n")
         else:
-            analyzer.print_report(report)
+            analyzer.get_llm_review(report, api_key, args.model, args.api_base)
+            report = analyzer.generate_report()
+
+    if args.llm_prompt:
+        print("\n" + "="*80)
+        print("🤖 LLM ENRICHMENT PROMPT")
+        print("="*80)
+        print(analyzer.generate_llm_prompt(report))
+        print("="*80 + "\n")
+    else:
+        analyzer.print_report(report)
+
+    return analyzer, report
+
+def main():
+    args, parser = parse_args()
+
+    if not args.file and not args.directory:
+        parser.print_help()
+        sys.exit(1)
+
+    files_to_analyze = get_files_to_analyze(args)
+    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
+
+    all_reports = [process_file(f, args) for f in files_to_analyze]
 
     if args.output and reports:
         markdown_reports = [

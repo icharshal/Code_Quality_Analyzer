@@ -21,3 +21,7 @@
 ## 2025-05-17 - [Redundant String Operation Reduction]
 **Learning:** Calling the same string method (like `.startswith()`) multiple times on the same object within a tight loop is inefficient.
 **Action:** Cached the result of `stripped.startswith('#')` in an `is_comment` variable within `_perform_line_analysis`.
+
+## 2026-05-20 - [Class-Level Regex Compilation]
+**Learning:** Re-compiling regex patterns in the `__init__` method of a class results in redundant computation every time a new instance is created.
+**Action:** Move static regex patterns to the class level to ensure they are only compiled once when the module is loaded. This optimization is particularly effective when the analyzer is called multiple times in a single execution (e.g., directory analysis).

@@ -12,12 +12,10 @@ import ast
 import os
 import sys
 import argparse
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 import re
-import subprocess
 import json
 import urllib.request
-import urllib.error
 
 try:
     import coverage
@@ -77,6 +75,10 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
 class CodeQualityAnalyzer:
     """Analyzes Python code for quality metrics and issues"""
     
+    # Pre-compile regex patterns at class level for performance
+    SECRET_RE = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
+    NAMING_RE = re.compile(r'(?<!^)(?=[A-Z])')
+
     def __init__(self, file_path: str):
         self.file_path = os.path.abspath(file_path)
         self.file_name = os.path.basename(file_path)
@@ -106,9 +108,6 @@ class CodeQualityAnalyzer:
             'best_practices': 0
         }
         self.llm_review = None
-        # Pre-compile secret detection regex for performance
-        self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
-        self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
 
     def _perform_line_analysis(self):
@@ -128,7 +127,7 @@ class CodeQualityAnalyzer:
                 self.metrics['comment_lines'] += 1
 
             # 2. Secret detection
-            if self.secret_re.search(line):
+            if self.SECRET_RE.search(line):
                 self.issues['critical'].append({
                     'line': i,
                     'issue': 'Hardcoded Secret',
@@ -427,7 +426,7 @@ class CodeQualityAnalyzer:
                     'issue': 'Naming Convention',
                     'description': f"Function '{node.name}' should use snake_case",
                     'severity': 'LOW',
-                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.naming_re.sub('_', node.name).lower()}')."
+                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.NAMING_RE.sub('_', node.name).lower()}')."
                 })
                 score -= 0.3
         
@@ -655,7 +654,8 @@ class CodeQualityAnalyzer:
 
         try:
             req = urllib.request.Request(api_base, data=json.dumps(data).encode('utf-8'), headers=headers)
-            with urllib.request.urlopen(req) as response:
+            # Use a timeout to prevent hanging connections
+            with urllib.request.urlopen(req, timeout=30) as response:
                 result = json.loads(response.read().decode('utf-8'))
                 self.llm_review = result['choices'][0]['message']['content']
                 return self.llm_review

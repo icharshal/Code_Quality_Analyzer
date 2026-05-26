@@ -14,10 +14,8 @@ import sys
 import argparse
 from typing import Dict, Optional
 import re
-import subprocess
 import json
 import urllib.request
-import urllib.error
 
 try:
     import coverage

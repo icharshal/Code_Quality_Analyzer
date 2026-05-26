@@ -21,3 +21,7 @@
 ## 2025-05-17 - [Redundant String Operation Reduction]
 **Learning:** Calling the same string method (like `.startswith()`) multiple times on the same object within a tight loop is inefficient.
 **Action:** Cached the result of `stripped.startswith('#')` in an `is_comment` variable within `_perform_line_analysis`.
+
+## 2026-05-20 - [Single-Pass Documentation and Type Hint Analysis]
+**Learning:** Calculating documentation coverage and type hint coverage by iterating over all function nodes after AST traversal is redundant if it can be done during the initial traversal.
+**Action:** Updated `CodeAnalysisVisitor` to count functions with docstrings and type hints during the initial `visit_FunctionDef` pass. This avoids multiple subsequent iterations over the function list, improving maintainability analysis performance.

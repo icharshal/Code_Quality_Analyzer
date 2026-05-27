@@ -657,34 +657,36 @@ class CodeQualityAnalyzer:
 
     def generate_llm_prompt(self, report: Dict) -> str:
         """Generate a prompt for LLM enrichment"""
-        prompt = "Act as an expert Python software engineer. Review the following code and its quality analysis report.\n"
-        prompt += "Provide a detailed code review, explaining why each issue is problematic and providing refactored code snippets.\n\n"
+        prompt_parts = [
+            "Act as an expert Python software engineer. Review the following code and its quality analysis report.\n",
+            "Provide a detailed code review, explaining why each issue is problematic and providing refactored code snippets.\n\n",
+            "### CODE TO REVIEW\n",
+            "```python\n",
+            self.code,
+            "\n```\n\n",
+            "### ANALYSIS REPORT SUMMARY\n",
+            f"- Overall Score: {report['overall_score']}/10\n",
+            f"- Total Issues: {report['total_issues']}\n",
+            "\n### ISSUES FOUND\n"
+        ]
 
-        prompt += "### CODE TO REVIEW\n"
-        prompt += "```python\n"
-        prompt += self.code
-        prompt += "\n```\n\n"
-
-        prompt += "### ANALYSIS REPORT SUMMARY\n"
-        prompt += f"- Overall Score: {report['overall_score']}/10\n"
-        prompt += f"- Total Issues: {report['total_issues']}\n"
-
-        prompt += "\n### ISSUES FOUND\n"
         for severity in ['critical', 'high', 'medium', 'low']:
             issues = report['issues'][severity]
             if issues:
-                prompt += f"#### {severity.upper()}\n"
+                prompt_parts.append(f"#### {severity.upper()}\n")
                 for issue in issues:
                     line_info = f" (Line {issue['line']})" if issue['line'] > 0 else ""
-                    prompt += f"- {issue['issue']}{line_info}: {issue['description']}\n"
+                    prompt_parts.append(f"- {issue['issue']}{line_info}: {issue['description']}\n")
 
-        prompt += "\n### INSTRUCTIONS\n"
-        prompt += "1. Analyze the critical and high priority issues first.\n"
-        prompt += "2. Suggest concrete refactoring for the identified issues.\n"
-        prompt += "3. Identify any subtle bugs or architectural issues not caught by the automated tool.\n"
-        prompt += "4. Provide the final, improved version of the code.\n"
+        prompt_parts.extend([
+            "\n### INSTRUCTIONS\n",
+            "1. Analyze the critical and high priority issues first.\n",
+            "2. Suggest concrete refactoring for the identified issues.\n",
+            "3. Identify any subtle bugs or architectural issues not caught by the automated tool.\n",
+            "4. Provide the final, improved version of the code.\n"
+        ])
 
-        return prompt
+        return "".join(prompt_parts)
 
     def get_llm_review(self, report: Dict, api_key: str, model: str = "gpt-4o", api_base: str = "https://api.openai.com/v1/chat/completions") -> Optional[str]:
         """Fetch code review from an LLM API"""

@@ -12,7 +12,7 @@ import ast
 import os
 import sys
 import argparse
-from typing import Dict, Optional
+from typing import Dict, Optional, List, Tuple
 import re
 import json
 import urllib.request
@@ -25,6 +25,13 @@ except ImportError:
 
 class CodeAnalysisVisitor(ast.NodeVisitor):
     """AST visitor to collect metrics in a single pass"""
+
+    OS_DANGEROUS = {'system', 'popen', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'}
+    SUBPROCESS_DANGEROUS = {'run', 'call', 'check_call', 'check_output', 'Popen'}
+    PICKLE_DANGEROUS = {'load', 'loads'}
+    MARSHAL_DANGEROUS = {'load', 'loads'}
+    TEMPFILE_DANGEROUS = {'mktemp'}
+
     def __init__(self):
         self.functions = []
         self.functions_with_docs = 0
@@ -77,9 +84,9 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
                 method = func.attr
                 full_name = f"{module}.{method}"
 
-                if module == 'os' and method in {'system', 'popen', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'}:
+                if module == 'os' and method in self.OS_DANGEROUS:
                     self.dangerous_calls.append((node, full_name))
-                elif module == 'subprocess' and method in {'run', 'call', 'check_call', 'check_output', 'Popen'}:
+                elif module == 'subprocess' and method in self.SUBPROCESS_DANGEROUS:
                     # Check for shell=True
                     for keyword in node.keywords:
                         if keyword.arg == 'shell':
@@ -87,15 +94,17 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
                             is_true = False
                             if isinstance(val, ast.Constant) and val.value is True:
                                 is_true = True
-                            # Support for older Python versions if needed, but avoid direct reference to avoid DeprecationWarning if possible
+                            # Support for older Python versions if needed
                             elif type(val).__name__ == 'NameConstant' and getattr(val, 'value', None) is True:
                                 is_true = True
 
                             if is_true:
                                 self.dangerous_calls.append((node, full_name))
-                elif module == 'pickle' and method in {'load', 'loads'}:
+                elif module == 'pickle' and method in self.PICKLE_DANGEROUS:
                     self.dangerous_calls.append((node, full_name))
-                elif module == 'marshal' and method in {'load', 'loads'}:
+                elif module == 'marshal' and method in self.MARSHAL_DANGEROUS:
+                    self.dangerous_calls.append((node, full_name))
+                elif module == 'tempfile' and method in self.TEMPFILE_DANGEROUS:
                     self.dangerous_calls.append((node, full_name))
 
             # Check for list comprehension opportunities
@@ -388,6 +397,9 @@ class CodeQualityAnalyzer:
             elif 'pickle.' in func_name or 'marshal.' in func_name:
                 description += " (insecure deserialization)"
                 suggestion += " Use safer formats like JSON for untrusted data."
+            elif 'tempfile.mktemp' in func_name:
+                description += " (insecure temporary file creation)"
+                suggestion += " Use tempfile.mkstemp() or tempfile.NamedTemporaryFile() instead."
 
             self.issues['critical'].append({
                 'line': node.lineno,
@@ -743,7 +755,7 @@ def parse_args():
     parser.add_argument('--api-base', type=str, default='https://api.openai.com/v1/chat/completions', help='API base URL')
     return parser.parse_args(), parser
 
-def get_files_to_analyze(args):
+def get_files_to_analyze(args) -> List[str]:
     files_to_analyze = []
     if args.file:
         if not os.path.exists(args.file):
@@ -760,37 +772,25 @@ def get_files_to_analyze(args):
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
     
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-    
-    reports = []
-    for file_path in files_to_analyze:
-        analyzer = CodeQualityAnalyzer(file_path)
-        report = analyzer.analyze(test_file=args.test_file)
+    return files_to_analyze
 
-        if args.llm_review:
-            api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
-            if not api_key:
-                print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
-            else:
-                analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-                # Re-generate report with LLM review
-                report = analyzer.generate_report()
+def process_file(file_path: str, args) -> Tuple[CodeQualityAnalyzer, Dict]:
+    """Analyze a single file and return analyzer and report"""
+    analyzer = CodeQualityAnalyzer(file_path)
+    report = analyzer.analyze(test_file=args.test_file)
 
-        reports.append((analyzer, report))
-
-        if args.llm_prompt:
-            print("\n" + "="*80)
-            print("🤖 LLM ENRICHMENT PROMPT")
-            print("="*80)
-            print(analyzer.generate_llm_prompt(report))
-            print("="*80 + "\n")
+    if args.llm_review:
+        api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            print(f"❌ Error: API key required for LLM review of {file_path}. Use --api-key or set OPENAI_API_KEY environment variable.")
         else:
             analyzer.get_llm_review(report, api_key, args.model, args.api_base)
+            # Re-generate report with LLM review
             report = analyzer.generate_report()
 
     if args.llm_prompt:
         print("\n" + "="*80)
-        print("🤖 LLM ENRICHMENT PROMPT")
+        print(f"🤖 LLM ENRICHMENT PROMPT - {file_path}")
         print("="*80)
         print(analyzer.generate_llm_prompt(report))
         print("="*80 + "\n")
@@ -809,18 +809,29 @@ def main():
     files_to_analyze = get_files_to_analyze(args)
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
 
-    all_reports = [process_file(f, args) for f in files_to_analyze]
+    all_reports = []
+    has_critical_issues = False
 
-    if args.output and reports:
+    for f in files_to_analyze:
+        analyzer, report = process_file(f, args)
+        all_reports.append((analyzer, report))
+        if report['issues']['critical']:
+            has_critical_issues = True
+
+    if args.output and all_reports:
         markdown_reports = [
             analyzer.generate_markdown_report(report)
-            for analyzer, report in reports
+            for analyzer, report in all_reports
         ]
         full_report = "\n\n---\n\n".join(markdown_reports)
 
         with open(args.output, 'w', encoding='utf-8') as f:
             f.write(full_report)
         print(f"📝 Combined report saved to {args.output}")
+
+    if has_critical_issues:
+        print("❌ Analysis failed: Critical issues found.")
+        sys.exit(1)
 
 
 if __name__ == "__main__":

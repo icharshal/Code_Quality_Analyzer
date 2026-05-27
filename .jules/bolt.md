@@ -25,3 +25,6 @@
 ## 2026-05-20 - [Single-Pass Documentation and Type Hint Analysis]
 **Learning:** Calculating documentation coverage and type hint coverage by iterating over all function nodes after AST traversal is redundant if it can be done during the initial traversal.
 **Action:** Updated `CodeAnalysisVisitor` to count functions with docstrings and type hints during the initial `visit_FunctionDef` pass. This avoids multiple subsequent iterations over the function list, improving maintainability analysis performance.
+## 2026-05-27 - Optimization of Dangerous Function Lookups
+**Learning:** Using sets for membership checks is significantly faster than using lists or repeated equality checks, especially when performed frequently during AST traversal. Storing these sets as class-level constants avoids redundant creation overhead for each visitor instance.
+**Action:** Implemented OS_DANGEROUS, SUBPROCESS_DANGEROUS, etc., as class constants in CodeAnalysisVisitor.

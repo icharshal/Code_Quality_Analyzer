@@ -25,3 +25,7 @@
 ## 2026-05-20 - [Single-Pass Documentation and Type Hint Analysis]
 **Learning:** Calculating documentation coverage and type hint coverage by iterating over all function nodes after AST traversal is redundant if it can be done during the initial traversal.
 **Action:** Updated `CodeAnalysisVisitor` to count functions with docstrings and type hints during the initial `visit_FunctionDef` pass. This avoids multiple subsequent iterations over the function list, improving maintainability analysis performance.
+
+## 2025-05-15 - Regex Optimization in CodeQualityAnalyzer
+**Learning:** Re-compiling the same regex patterns for every instance of a class (especially when analyzing multiple files in a loop) adds unnecessary overhead. Moving these to class-level constants ensures they are compiled only once.
+**Action:** Moved `SECRET_RE` and `NAMING_RE` to be class-level constants in `CodeQualityAnalyzer`. This is expected to provide a measurable performance improvement when analyzing large directories.

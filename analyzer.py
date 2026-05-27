@@ -137,6 +137,7 @@ class CodeQualityAnalyzer:
             'best_practices': 0
         }
         self.llm_review = None
+        self.overall_score = 0.0
         # Pre-compile secret detection regex for performance
         self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
         self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')

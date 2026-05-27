@@ -750,7 +750,7 @@ def get_files_to_analyze(args):
             print(f"❌ Error: File not found: {args.file}")
             sys.exit(1)
         files_to_analyze.append(args.file)
-    
+
     if args.directory:
         if not os.path.exists(args.directory):
             print(f"❌ Error: Directory not found: {args.directory}")
@@ -759,38 +759,25 @@ def get_files_to_analyze(args):
             for file in files:
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
-    
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-    
-    reports = []
-    for file_path in files_to_analyze:
-        analyzer = CodeQualityAnalyzer(file_path)
-        report = analyzer.analyze(test_file=args.test_file)
 
-        if args.llm_review:
-            api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
-            if not api_key:
-                print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
-            else:
-                analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-                # Re-generate report with LLM review
-                report = analyzer.generate_report()
+    return files_to_analyze
 
-        reports.append((analyzer, report))
+def process_file(file_path, args):
+    """Analyze a single file and handle LLM review/prompts"""
+    analyzer = CodeQualityAnalyzer(file_path)
+    report = analyzer.analyze(test_file=args.test_file)
 
-        if args.llm_prompt:
-            print("\n" + "="*80)
-            print("🤖 LLM ENRICHMENT PROMPT")
-            print("="*80)
-            print(analyzer.generate_llm_prompt(report))
-            print("="*80 + "\n")
+    if args.llm_review:
+        api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            print(f"❌ Error: API key required for LLM review of {file_path}. Use --api-key or set OPENAI_API_KEY environment variable.")
         else:
             analyzer.get_llm_review(report, api_key, args.model, args.api_base)
             report = analyzer.generate_report()
 
     if args.llm_prompt:
         print("\n" + "="*80)
-        print("🤖 LLM ENRICHMENT PROMPT")
+        print(f"🤖 LLM ENRICHMENT PROMPT - {file_path}")
         print("="*80)
         print(analyzer.generate_llm_prompt(report))
         print("="*80 + "\n")
@@ -807,11 +794,16 @@ def main():
         sys.exit(1)
 
     files_to_analyze = get_files_to_analyze(args)
+
+    if not files_to_analyze:
+        print("No Python files found to analyze.")
+        return
+
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
 
-    all_reports = [process_file(f, args) for f in files_to_analyze]
+    reports = [process_file(f, args) for f in files_to_analyze]
 
-    if args.output and reports:
+    if args.output:
         markdown_reports = [
             analyzer.generate_markdown_report(report)
             for analyzer, report in reports
@@ -821,6 +813,11 @@ def main():
         with open(args.output, 'w', encoding='utf-8') as f:
             f.write(full_report)
         print(f"📝 Combined report saved to {args.output}")
+
+    # Check for critical issues and exit with non-zero status if any found
+    has_critical = any(len(report['issues']['critical']) > 0 for _, report in reports)
+    if has_critical:
+        sys.exit(1)
 
 
 if __name__ == "__main__":

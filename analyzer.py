@@ -16,6 +16,7 @@ from typing import Dict, Optional
 import re
 import json
 import urllib.request
+from urllib.parse import urlparse
 
 try:
     import coverage
@@ -108,6 +109,10 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
 class CodeQualityAnalyzer:
     """Analyzes Python code for quality metrics and issues"""
     
+    # Pre-compile regex patterns as class constants for performance
+    SECRET_RE = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
+    NAMING_RE = re.compile(r'(?<!^)(?=[A-Z])')
+
     def __init__(self, file_path: str):
         self.file_path = os.path.abspath(file_path)
         self.file_name = os.path.basename(file_path)
@@ -137,9 +142,6 @@ class CodeQualityAnalyzer:
             'best_practices': 0
         }
         self.llm_review = None
-        # Pre-compile secret detection regex for performance
-        self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
-        self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
 
     def _perform_line_analysis(self):
@@ -159,7 +161,7 @@ class CodeQualityAnalyzer:
                 self.metrics['comment_lines'] += 1
 
             # 2. Secret detection
-            if self.secret_re.search(line):
+            if self.SECRET_RE.search(line):
                 self.issues['critical'].append({
                     'line': i,
                     'issue': 'Hardcoded Secret',
@@ -460,7 +462,7 @@ class CodeQualityAnalyzer:
                     'issue': 'Naming Convention',
                     'description': f"Function '{node.name}' should use snake_case",
                     'severity': 'LOW',
-                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.naming_re.sub('_', node.name).lower()}')."
+                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.NAMING_RE.sub('_', node.name).lower()}')."
                 })
                 score -= 0.3
         
@@ -688,6 +690,12 @@ class CodeQualityAnalyzer:
 
     def get_llm_review(self, report: Dict, api_key: str, model: str = "gpt-4o", api_base: str = "https://api.openai.com/v1/chat/completions") -> Optional[str]:
         """Fetch code review from an LLM API"""
+        # SSRF Protection: Validate the api_base URL
+        parsed_url = urlparse(api_base)
+        if parsed_url.scheme != 'https' or parsed_url.netloc != 'api.openai.com':
+            print(f"❌ Security Error: Untrusted API base URL: {api_base}")
+            return None
+
         print(f"🤖 Fetching LLM review using {model}...")
 
         prompt = self.generate_llm_prompt(report)
@@ -760,8 +768,18 @@ def get_files_to_analyze(args):
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
     
+    return files_to_analyze
+
+def main():
+    args, parser = parse_args()
+
+    if not args.file and not args.directory:
+        parser.print_help()
+        sys.exit(1)
+
+    files_to_analyze = get_files_to_analyze(args)
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-    
+
     reports = []
     for file_path in files_to_analyze:
         analyzer = CodeQualityAnalyzer(file_path)
@@ -776,8 +794,6 @@ def get_files_to_analyze(args):
                 # Re-generate report with LLM review
                 report = analyzer.generate_report()
 
-        reports.append((analyzer, report))
-
         if args.llm_prompt:
             print("\n" + "="*80)
             print("🤖 LLM ENRICHMENT PROMPT")
@@ -785,31 +801,9 @@ def get_files_to_analyze(args):
             print(analyzer.generate_llm_prompt(report))
             print("="*80 + "\n")
         else:
-            analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-            report = analyzer.generate_report()
+            analyzer.print_report(report)
 
-    if args.llm_prompt:
-        print("\n" + "="*80)
-        print("🤖 LLM ENRICHMENT PROMPT")
-        print("="*80)
-        print(analyzer.generate_llm_prompt(report))
-        print("="*80 + "\n")
-    else:
-        analyzer.print_report(report)
-
-    return analyzer, report
-
-def main():
-    args, parser = parse_args()
-
-    if not args.file and not args.directory:
-        parser.print_help()
-        sys.exit(1)
-
-    files_to_analyze = get_files_to_analyze(args)
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-
-    all_reports = [process_file(f, args) for f in files_to_analyze]
+        reports.append((analyzer, report))
 
     if args.output and reports:
         markdown_reports = [

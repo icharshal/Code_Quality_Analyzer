@@ -1,0 +1,58 @@
+
+🔍 Analyzing 1 file(s)...
+
+🔍 Analyzing analyzer.py...
+
+================================================================================
+📊 CODE QUALITY REPORT - analyzer.py
+================================================================================
+
+🎯 Overall Quality Score: 7.8/10 ⭐⭐⭐⭐☆
+
+📈 Category Scores:
+  - Structure: 9.0/10
+  - Error Handling: 10.0/10
+  - Performance: 6.7/10
+  - Security: 10.0/10
+  - Maintainability: 10.0/10
+  - Best Practices: 0.0/10
+
+📏 Code Metrics:
+  - Lines of Code: 820
+  - Functions: 40
+  - Classes: 2
+  - Avg Function Length: 17.5 lines
+
+🐛 Issues Found: 63
+
+  MEDIUM (1):
+    - Code Duplication
+      Potential code duplication detected
+      💡 Suggestion: Extract common logic into reusable functions or classes (DRY principle).
+
+  LOW (62):
+    - Line 84: List Comprehension Opportunity
+      Consider using list comprehension
+      💡 Suggestion: Replace this for loop with a list comprehension for more concise and efficient code.
+      > for keyword in node.keywords:
+    - Line 380: List Comprehension Opportunity
+      Consider using list comprehension
+      💡 Suggestion: Replace this for loop with a list comprehension for more concise and efficient code.
+      > for node, func_name in self.visitor.dangerous_calls:
+    - Line 288: List Comprehension Opportunity
+      Consider using list comprehension
+      💡 Suggestion: Replace this for loop with a list comprehension for more concise and efficient code.
+      > for node in self.visitor.functions:
+    - Line 446: List Comprehension Opportunity
+      Consider using list comprehension
+      💡 Suggestion: Replace this for loop with a list comprehension for more concise and efficient code.
+      > for node in self.visitor.print_calls:
+    - Line 333: List Comprehension Opportunity
+      Consider using list comprehension
+      💡 Suggestion: Replace this for loop with a list comprehension for more concise and efficient code.
+      > for node in self.visitor.except_handlers:
+    ... and 57 more
+
+================================================================================
+✅ PRODUCTION READY - Good code quality with minor improvements needed
+================================================================================

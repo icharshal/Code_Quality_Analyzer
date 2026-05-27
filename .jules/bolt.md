@@ -25,3 +25,7 @@
 ## 2026-05-20 - [Single-Pass Documentation and Type Hint Analysis]
 **Learning:** Calculating documentation coverage and type hint coverage by iterating over all function nodes after AST traversal is redundant if it can be done during the initial traversal.
 **Action:** Updated `CodeAnalysisVisitor` to count functions with docstrings and type hints during the initial `visit_FunctionDef` pass. This avoids multiple subsequent iterations over the function list, improving maintainability analysis performance.
+
+## 2026-05-27 - [Optimized API Key Retrieval]
+**Learning:** Repeatedly looking up environment variables or command-line arguments within a loop is an unnecessary performance overhead, especially during batch processing of many files.
+**Action:** Moved the API key retrieval logic outside the file analysis loop in `get_files_to_analyze`. This ensures the key is resolved once and reused across all analysis tasks.

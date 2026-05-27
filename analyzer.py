@@ -750,7 +750,7 @@ def get_files_to_analyze(args):
             print(f"❌ Error: File not found: {args.file}")
             sys.exit(1)
         files_to_analyze.append(args.file)
-    
+
     if args.directory:
         if not os.path.exists(args.directory):
             print(f"❌ Error: Directory not found: {args.directory}")
@@ -759,24 +759,25 @@ def get_files_to_analyze(args):
             for file in files:
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
-    
+
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-    
+
+    api_key = None
+    if args.llm_review:
+        api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
+            sys.exit(1)
+
     reports = []
     for file_path in files_to_analyze:
         analyzer = CodeQualityAnalyzer(file_path)
         report = analyzer.analyze(test_file=args.test_file)
 
-        if args.llm_review:
-            api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
-            if not api_key:
-                print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
-            else:
-                analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-                # Re-generate report with LLM review
-                report = analyzer.generate_report()
-
-        reports.append((analyzer, report))
+        if args.llm_review and api_key:
+            analyzer.get_llm_review(report, api_key, args.model, args.api_base)
+            # Re-generate report with LLM review
+            report = analyzer.generate_report()
 
         if args.llm_prompt:
             print("\n" + "="*80)
@@ -785,19 +786,11 @@ def get_files_to_analyze(args):
             print(analyzer.generate_llm_prompt(report))
             print("="*80 + "\n")
         else:
-            analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-            report = analyzer.generate_report()
+            analyzer.print_report(report)
 
-    if args.llm_prompt:
-        print("\n" + "="*80)
-        print("🤖 LLM ENRICHMENT PROMPT")
-        print("="*80)
-        print(analyzer.generate_llm_prompt(report))
-        print("="*80 + "\n")
-    else:
-        analyzer.print_report(report)
+        reports.append((analyzer, report))
 
-    return analyzer, report
+    return reports
 
 def main():
     args, parser = parse_args()
@@ -806,15 +799,21 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    files_to_analyze = get_files_to_analyze(args)
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
+    all_reports = get_files_to_analyze(args)
 
-    all_reports = [process_file(f, args) for f in files_to_analyze]
+    if args.output and all_reports:
+        # Security check: Prevent path traversal
+        output_path = os.path.abspath(args.output)
+        cwd = os.path.abspath(os.getcwd())
 
-    if args.output and reports:
+        if not output_path.startswith(cwd):
+            print(f"❌ Error: Invalid output path: {args.output}")
+            print("For security reasons, output must be within the current directory.")
+            sys.exit(1)
+
         markdown_reports = [
             analyzer.generate_markdown_report(report)
-            for analyzer, report in reports
+            for analyzer, report in all_reports
         ]
         full_report = "\n\n---\n\n".join(markdown_reports)
 

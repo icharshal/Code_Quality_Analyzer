@@ -108,6 +108,10 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
 class CodeQualityAnalyzer:
     """Analyzes Python code for quality metrics and issues"""
     
+    # Pre-compile regex patterns as class-level constants for performance
+    SECRET_RE = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
+    NAMING_RE = re.compile(r'(?<!^)(?=[A-Z])')
+
     def __init__(self, file_path: str):
         self.file_path = os.path.abspath(file_path)
         self.file_name = os.path.basename(file_path)
@@ -137,9 +141,6 @@ class CodeQualityAnalyzer:
             'best_practices': 0
         }
         self.llm_review = None
-        # Pre-compile secret detection regex for performance
-        self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
-        self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
 
     def _perform_line_analysis(self):
@@ -159,7 +160,7 @@ class CodeQualityAnalyzer:
                 self.metrics['comment_lines'] += 1
 
             # 2. Secret detection
-            if self.secret_re.search(line):
+            if self.SECRET_RE.search(line):
                 self.issues['critical'].append({
                     'line': i,
                     'issue': 'Hardcoded Secret',
@@ -460,7 +461,7 @@ class CodeQualityAnalyzer:
                     'issue': 'Naming Convention',
                     'description': f"Function '{node.name}' should use snake_case",
                     'severity': 'LOW',
-                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.naming_re.sub('_', node.name).lower()}')."
+                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.NAMING_RE.sub('_', node.name).lower()}')."
                 })
                 score -= 0.3
         
@@ -743,7 +744,8 @@ def parse_args():
     parser.add_argument('--api-base', type=str, default='https://api.openai.com/v1/chat/completions', help='API base URL')
     return parser.parse_args(), parser
 
-def get_files_to_analyze(args):
+def collect_files(args) -> list[str]:
+    """Collect Python files to analyze based on arguments"""
     files_to_analyze = []
     if args.file:
         if not os.path.exists(args.file):
@@ -760,33 +762,17 @@ def get_files_to_analyze(args):
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
     
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-    
-    reports = []
-    for file_path in files_to_analyze:
-        analyzer = CodeQualityAnalyzer(file_path)
-        report = analyzer.analyze(test_file=args.test_file)
+    return files_to_analyze
 
-        if args.llm_review:
-            api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
-            if not api_key:
-                print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
-            else:
-                analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-                # Re-generate report with LLM review
-                report = analyzer.generate_report()
+def process_file(file_path: str, args, api_key: Optional[str] = None):
+    """Analyze a single file and handle LLM review and output"""
+    analyzer = CodeQualityAnalyzer(file_path)
+    report = analyzer.analyze(test_file=args.test_file)
 
-        reports.append((analyzer, report))
-
-        if args.llm_prompt:
-            print("\n" + "="*80)
-            print("🤖 LLM ENRICHMENT PROMPT")
-            print("="*80)
-            print(analyzer.generate_llm_prompt(report))
-            print("="*80 + "\n")
-        else:
-            analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-            report = analyzer.generate_report()
+    if args.llm_review and api_key:
+        analyzer.get_llm_review(report, api_key, args.model, args.api_base)
+        # Re-generate report with LLM review
+        report = analyzer.generate_report()
 
     if args.llm_prompt:
         print("\n" + "="*80)
@@ -806,10 +792,17 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    files_to_analyze = get_files_to_analyze(args)
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
+    files_to_analyze = collect_files(args)
+    print(f"\n🔍 Found {len(files_to_analyze)} file(s) to analyze.\n")
 
-    all_reports = [process_file(f, args) for f in files_to_analyze]
+    api_key = None
+    if args.llm_review:
+        api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
+            sys.exit(1)
+
+    reports = [process_file(f, args, api_key) for f in files_to_analyze]
 
     if args.output and reports:
         markdown_reports = [

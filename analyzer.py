@@ -157,6 +157,7 @@ class CodeQualityAnalyzer:
         self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
         self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
+        self.overall_score = 0.0
 
     def _perform_line_analysis(self):
         """Perform all line-based analyses in a single pass"""
@@ -763,6 +764,7 @@ def parse_args():
     return parser.parse_args(), parser
 
 def get_files_to_analyze(args):
+    """Collect all Python files to analyze based on arguments"""
     files_to_analyze = []
     if args.file:
         if not os.path.exists(args.file):
@@ -818,10 +820,10 @@ def main():
 
     reports = get_files_to_analyze(args)
 
-    if args.output and reports:
+    if args.output and results:
         markdown_reports = [
             analyzer.generate_markdown_report(report)
-            for analyzer, report in reports
+            for analyzer, report in results
         ]
         full_report = "\n\n---\n\n".join(markdown_reports)
 

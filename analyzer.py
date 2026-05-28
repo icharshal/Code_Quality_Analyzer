@@ -638,94 +638,101 @@ class CodeQualityAnalyzer:
     def _gen_md_summary(self, report: Dict) -> str:
         score = report['overall_score']
         rating = self._get_rating(score)
-        md = f"## 🎯 Executive Summary\n\n"
-        md += f"| Category | Rating | Score |\n"
-        md += f"|----------|--------|-------|\n"
-        md += f"| **Overall Quality** | {rating} | {score}/10 |\n"
+        lines = [
+            "## 🎯 Executive Summary\n",
+            "| Category | Rating | Score |",
+            "|----------|--------|-------|",
+            f"| **Overall Quality** | {rating} | {score}/10 |"
+        ]
         for cat, s in report['category_scores'].items():
-            md += f"| {cat.replace('_', ' ').title()} | {self._get_rating(s)} | {s:.1f}/10 |\n"
+            lines.append(f"| {cat.replace('_', ' ').title()} | {self._get_rating(s)} | {s:.1f}/10 |")
 
-        md += f"\n**Verdict**: "
+        verdict_line = "\n**Verdict**: "
         if score >= 9.0 and not report['issues']['critical']:
-            md += "✅ **PRODUCTION READY** - Excellent code quality!\n"
+            verdict_line += "✅ **PRODUCTION READY** - Excellent code quality!\n"
         elif score >= 7.0 and not report['issues']['critical']:
-            md += "✅ **PRODUCTION READY** - Good code quality with minor improvements needed\n"
+            verdict_line += "✅ **PRODUCTION READY** - Good code quality with minor improvements needed\n"
         elif report['issues']['critical']:
-            md += "❌ **NOT PRODUCTION READY** - Critical issues must be fixed\n"
+            verdict_line += "❌ **NOT PRODUCTION READY** - Critical issues must be fixed\n"
         else:
-            md += "⚠️  **NEEDS IMPROVEMENT** - Significant refactoring recommended\n"
-        return md
+            verdict_line += "⚠️  **NEEDS IMPROVEMENT** - Significant refactoring recommended\n"
+        lines.append(verdict_line)
+        return "\n".join(lines)
 
     def _gen_md_metrics(self, report: Dict) -> str:
         metrics = report['metrics']
-        md = "## 📏 Code Metrics\n\n"
-        md += f"- **Lines of Code**: {metrics['lines_of_code']}\n"
-        md += f"- **Functions**: {metrics['functions']}\n"
-        md += f"- **Classes**: {metrics['classes']}\n"
+        lines = [
+            "## 📏 Code Metrics\n",
+            f"- **Lines of Code**: {metrics['lines_of_code']}",
+            f"- **Functions**: {metrics['functions']}",
+            f"- **Classes**: {metrics['classes']}"
+        ]
         if metrics['avg_function_length'] > 0:
-            md += f"- **Avg Function Length**: {metrics['avg_function_length']:.1f} lines\n"
+            lines.append(f"- **Avg Function Length**: {metrics['avg_function_length']:.1f} lines")
         if metrics['coverage'] is not None:
-            md += f"- **Test Coverage**: {metrics['coverage']:.1f}%\n"
-        return md
+            lines.append(f"- **Test Coverage**: {metrics['coverage']:.1f}%")
+        return "\n".join(lines) + "\n"
 
     def _gen_md_issues(self, report: Dict) -> str:
-        md = f"## 🐛 Issues Found ({report['total_issues']})\n\n"
+        lines = [f"## 🐛 Issues Found ({report['total_issues']})\n"]
         for severity in ['critical', 'high', 'medium', 'low']:
             issues = report['issues'][severity]
             if issues:
-                md += f"### 🔴 {severity.upper()} ({len(issues)})\n\n"
+                lines.append(f"### 🔴 {severity.upper()} ({len(issues)})\n")
                 for issue in issues:
                     line_info = f"Line {issue['line']}: " if issue['line'] > 0 else ""
-                    md += f"- **{line_info}{issue['issue']}**\n"
-                    md += f"  - *Problem*: {issue['description']}\n"
+                    lines.append(f"- **{line_info}{issue['issue']}**")
+                    lines.append(f"  - *Problem*: {issue['description']}")
                     if 'suggestion' in issue:
-                        md += f"  - *Fix*: {issue['suggestion']}\n"
-                md += "\n"
-        return md
+                        lines.append(f"  - *Fix*: {issue['suggestion']}")
+                lines.append("")
+        return "\n".join(lines)
 
     def _gen_md_recommendations(self, report: Dict) -> str:
-        md = "## 💡 Recommendations\n\n"
+        lines = ["## 💡 Recommendations\n"]
         all_issues = []
         for s in ['critical', 'high', 'medium', 'low']:
             all_issues.extend(report['issues'][s])
 
         if not all_issues:
-            md += "Keep up the great work! No major issues found.\n"
+            lines.append("Keep up the great work! No major issues found.")
         else:
             for i, issue in enumerate(all_issues[:10]):
-                md += f"{i+1}. **{issue['issue']}**: {issue['suggestion']}\n"
-        return md
+                lines.append(f"{i+1}. **{issue['issue']}**: {issue['suggestion']}")
+        return "\n".join(lines) + "\n"
 
     def generate_llm_prompt(self, report: Dict) -> str:
         """Generate a prompt for LLM enrichment"""
-        prompt = "Act as an expert Python software engineer. Review the following code and its quality analysis report.\n"
-        prompt += "Provide a detailed code review, explaining why each issue is problematic and providing refactored code snippets.\n\n"
+        lines = [
+            "Act as an expert Python software engineer. Review the following code and its quality analysis report.",
+            "Provide a detailed code review, explaining why each issue is problematic and providing refactored code snippets.\n",
+            "### CODE TO REVIEW",
+            "```python",
+            self.code,
+            "```\n",
+            "### ANALYSIS REPORT SUMMARY",
+            f"- Overall Score: {report['overall_score']}/10",
+            f"- Total Issues: {report['total_issues']}\n",
+            "### ISSUES FOUND"
+        ]
 
-        prompt += "### CODE TO REVIEW\n"
-        prompt += "```python\n"
-        prompt += self.code
-        prompt += "\n```\n\n"
-
-        prompt += "### ANALYSIS REPORT SUMMARY\n"
-        prompt += f"- Overall Score: {report['overall_score']}/10\n"
-        prompt += f"- Total Issues: {report['total_issues']}\n"
-
-        prompt += "\n### ISSUES FOUND\n"
         for severity in ['critical', 'high', 'medium', 'low']:
             issues = report['issues'][severity]
             if issues:
-                prompt += f"#### {severity.upper()}\n"
+                lines.append(f"#### {severity.upper()}")
                 for issue in issues:
                     line_info = f" (Line {issue['line']})" if issue['line'] > 0 else ""
-                    prompt += f"- {issue['issue']}{line_info}: {issue['description']}\n"
+                    lines.append(f"- {issue['issue']}{line_info}: {issue['description']}")
 
-        prompt += "\n### INSTRUCTIONS\n"
-        prompt += "1. Analyze the critical and high priority issues first.\n"
-        prompt += "2. Suggest concrete refactoring for the identified issues.\n"
-        prompt += "3. Identify any subtle bugs or architectural issues not caught by the automated tool.\n"
-        prompt += "4. Provide the final, improved version of the code.\n"
+        lines.extend([
+            "\n### INSTRUCTIONS",
+            "1. Analyze the critical and high priority issues first.",
+            "2. Suggest concrete refactoring for the identified issues.",
+            "3. Identify any subtle bugs or architectural issues not caught by the automated tool.",
+            "4. Provide the final, improved version of the code."
+        ])
 
-        return prompt
+        return "\n".join(lines) + "\n"
 
     def get_llm_review(self, report: Dict, api_key: str, model: str = "gpt-4o", api_base: str = "https://api.openai.com/v1/chat/completions") -> Optional[str]:
         """Fetch code review from an LLM API"""
@@ -840,8 +847,24 @@ def main():
             print("="*80)
             print(analyzer.generate_llm_prompt(report))
             print("="*80 + "\n")
-        else:
-            analyzer.print_report(report)
+
+    if args.llm_prompt:
+        print("\n" + "="*80)
+        print("🤖 LLM ENRICHMENT PROMPT")
+        print("="*80)
+        print(analyzer.generate_llm_prompt(report))
+        print("="*80 + "\n")
+    else:
+        analyzer.print_report(report)
+
+    return analyzer, report
+
+def main():
+    args, parser = parse_args()
+
+    if not args.file and not args.directory:
+        parser.print_help()
+        sys.exit(1)
 
         reports.append((analyzer, report))
 

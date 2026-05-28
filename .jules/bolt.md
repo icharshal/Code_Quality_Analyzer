@@ -26,6 +26,6 @@
 **Learning:** Calculating documentation coverage and type hint coverage by iterating over all function nodes after AST traversal is redundant if it can be done during the initial traversal.
 **Action:** Updated `CodeAnalysisVisitor` to count functions with docstrings and type hints during the initial `visit_FunctionDef` pass. This avoids multiple subsequent iterations over the function list, improving maintainability analysis performance.
 
-## 2026-05-27 - [Batch Coverage Optimization]
-**Learning:** For directory-wide analysis, running the test suite under coverage once for the entire batch is significantly more efficient than re-running it for every individual file.
-**Action:** Refactored `main` to run a shared coverage analysis once when multiple files are provided, then sharing the results across all `CodeQualityAnalyzer` instances.
+## 2026-05-27 - Optimize string concatenation in report generation
+**Learning:** Using `list.append()` and `"".join()` is more efficient and Pythonic than repeated string concatenation with `+=` in loops, especially when dealing with large reports containing thousands of issues. Although modern Python interpreters (CPython) have optimizations for `s += ...`, using lists avoids potential O(N^2) complexity in other implementations and improves code readability by separating content from formatting.
+**Action:** Consistently use list-based string building for all report generation methods.

@@ -17,6 +17,7 @@ from typing import Dict, Optional
 import re
 import json
 import urllib.request
+from urllib.parse import urlparse
 
 try:
     import coverage
@@ -125,6 +126,10 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
 class CodeQualityAnalyzer:
     """Analyzes Python code for quality metrics and issues"""
     
+    # Pre-compile regex patterns as class constants for performance
+    SECRET_RE = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
+    NAMING_RE = re.compile(r'(?<!^)(?=[A-Z])')
+
     def __init__(self, file_path: str):
         self.file_path = os.path.abspath(file_path)
         self.file_name = os.path.basename(file_path)
@@ -154,9 +159,6 @@ class CodeQualityAnalyzer:
             'best_practices': 0
         }
         self.llm_review = None
-        # Pre-compile secret detection regex for performance
-        self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
-        self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
         self.overall_score = 0.0
 
@@ -177,7 +179,7 @@ class CodeQualityAnalyzer:
                 self.metrics['comment_lines'] += 1
 
             # 2. Secret detection
-            if self.secret_re.search(line):
+            if self.SECRET_RE.search(line):
                 self.issues['critical'].append({
                     'line': i,
                     'issue': 'Hardcoded Secret',
@@ -499,7 +501,7 @@ class CodeQualityAnalyzer:
                     'issue': 'Naming Convention',
                     'description': f"Function '{node.name}' should use snake_case",
                     'severity': 'LOW',
-                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.naming_re.sub('_', node.name).lower()}')."
+                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.NAMING_RE.sub('_', node.name).lower()}')."
                 })
                 score -= 0.3
         
@@ -727,6 +729,12 @@ class CodeQualityAnalyzer:
 
     def get_llm_review(self, report: Dict, api_key: str, model: str = "gpt-4o", api_base: str = "https://api.openai.com/v1/chat/completions") -> Optional[str]:
         """Fetch code review from an LLM API"""
+        # SSRF Protection: Validate the api_base URL
+        parsed_url = urlparse(api_base)
+        if parsed_url.scheme != 'https' or parsed_url.netloc != 'api.openai.com':
+            print(f"❌ Security Error: Untrusted API base URL: {api_base}")
+            return None
+
         print(f"🤖 Fetching LLM review using {model}...")
 
         prompt = self.generate_llm_prompt(report)
@@ -812,20 +820,6 @@ def main():
     files_to_analyze = get_files_to_analyze(args)
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
 
-    api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
-    
-    # Run coverage once if multiple files and test file provided
-    use_existing_coverage = False
-    if args.test_file and len(files_to_analyze) > 1:
-        print(f"🧪 Running test suite coverage once for {len(files_to_analyze)} files...")
-        try:
-            # We use a dummy analyzer just to run coverage
-            temp_analyzer = CodeQualityAnalyzer(files_to_analyze[0])
-            temp_analyzer._run_coverage(args.test_file)
-            use_existing_coverage = True
-        except Exception as e:
-            print(f"⚠️  Error running shared coverage: {e}")
-
     reports = []
     api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
 
@@ -848,6 +842,8 @@ def main():
             print("="*80 + "\n")
         else:
             analyzer.print_report(report)
+
+        reports.append((analyzer, report))
 
     if args.output and results:
         markdown_reports = [

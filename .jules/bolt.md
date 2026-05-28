@@ -25,3 +25,7 @@
 ## 2026-05-20 - [Single-Pass Documentation and Type Hint Analysis]
 **Learning:** Calculating documentation coverage and type hint coverage by iterating over all function nodes after AST traversal is redundant if it can be done during the initial traversal.
 **Action:** Updated `CodeAnalysisVisitor` to count functions with docstrings and type hints during the initial `visit_FunctionDef` pass. This avoids multiple subsequent iterations over the function list, improving maintainability analysis performance.
+
+## 2026-05-27 - [Batch Coverage Optimization]
+**Learning:** For directory-wide analysis, running the test suite under coverage once for the entire batch is significantly more efficient than re-running it for every individual file.
+**Action:** Refactored `main` to run a shared coverage analysis once when multiple files are provided, then sharing the results across all `CodeQualityAnalyzer` instances.

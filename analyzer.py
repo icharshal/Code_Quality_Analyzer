@@ -64,46 +64,62 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
         self.for_stack.pop()
 
     def visit_Call(self, node):
-        # Check for dangerous functions and prints
+        """Analyze function calls for security and performance issues"""
         func = node.func
         if isinstance(func, ast.Name):
-            func_id = func.id
-            if func_id in {'eval', 'exec'}:
-                self.dangerous_calls.append((node, func_id))
-            elif func_id == 'print':
-                self.print_calls.append(node)
+            self._check_name_call(node, func)
         elif isinstance(func, ast.Attribute):
-            if isinstance(func.value, ast.Name):
-                module = func.value.id
-                method = func.attr
-                full_name = f"{module}.{method}"
-
-                if module == 'os' and method in {'system', 'popen', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'}:
-                    self.dangerous_calls.append((node, full_name))
-                elif module == 'subprocess' and method in {'run', 'call', 'check_call', 'check_output', 'Popen'}:
-                    # Check for shell=True
-                    for keyword in node.keywords:
-                        if keyword.arg == 'shell':
-                            val = keyword.value
-                            is_true = False
-                            if isinstance(val, ast.Constant) and val.value is True:
-                                is_true = True
-                            # Support for older Python versions if needed, but avoid direct reference to avoid DeprecationWarning if possible
-                            elif type(val).__name__ == 'NameConstant' and getattr(val, 'value', None) is True:
-                                is_true = True
-
-                            if is_true:
-                                self.dangerous_calls.append((node, full_name))
-                elif module == 'pickle' and method in {'load', 'loads'}:
-                    self.dangerous_calls.append((node, full_name))
-                elif module == 'marshal' and method in {'load', 'loads'}:
-                    self.dangerous_calls.append((node, full_name))
-
-            # Check for list comprehension opportunities
-            if func.attr == 'append' and self.for_stack:
-                self.for_loops_with_append.update(self.for_stack)
+            self._check_attribute_call(node, func)
 
         self.generic_visit(node)
+
+    def _check_name_call(self, node, func):
+        """Check for dangerous built-in function calls"""
+        func_id = func.id
+        if func_id in {'eval', 'exec'}:
+            self.dangerous_calls.append((node, func_id))
+        elif func_id == 'print':
+            self.print_calls.append(node)
+
+    def _check_attribute_call(self, node, func):
+        """Check for dangerous module attribute calls and performance patterns"""
+        if isinstance(func.value, ast.Name):
+            self._check_dangerous_module_call(node, func)
+
+        # Check for list comprehension opportunities
+        if func.attr == 'append' and self.for_stack:
+            self.for_loops_with_append.update(self.for_stack)
+
+    def _check_dangerous_module_call(self, node, func):
+        """Detect dangerous calls to specific modules (os, subprocess, etc.)"""
+        module = func.value.id
+        method = func.attr
+        full_name = f"{module}.{method}"
+
+        if module == 'os' and method in {
+            'system', 'popen', 'spawnl', 'spawnle', 'spawnlp',
+            'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'
+        }:
+            self.dangerous_calls.append((node, full_name))
+        elif module == 'subprocess' and method in {'run', 'call', 'check_call', 'check_output', 'Popen'}:
+            if self._is_shell_true(node):
+                self.dangerous_calls.append((node, full_name))
+        elif module in {'pickle', 'marshal'} and method in {'load', 'loads'}:
+            self.dangerous_calls.append((node, full_name))
+        elif module == 'tempfile' and method == 'mktemp':
+            self.dangerous_calls.append((node, full_name))
+
+    def _is_shell_true(self, node) -> bool:
+        """Helper to check if a subprocess call uses shell=True"""
+        for keyword in node.keywords:
+            if keyword.arg == 'shell':
+                val = keyword.value
+                if isinstance(val, ast.Constant) and val.value is True:
+                    return True
+                # Compatibility for older AST versions
+                if type(val).__name__ == 'NameConstant' and getattr(val, 'value', None) is True:
+                    return True
+        return False
 
 
 class CodeQualityAnalyzer:
@@ -142,6 +158,7 @@ class CodeQualityAnalyzer:
         self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
         self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
+        self.overall_score = 0.0
 
     def _perform_line_analysis(self):
         """Perform all line-based analyses in a single pass"""
@@ -407,6 +424,9 @@ class CodeQualityAnalyzer:
             elif 'pickle.' in func_name or 'marshal.' in func_name:
                 description += " (insecure deserialization)"
                 suggestion += " Use safer formats like JSON for untrusted data."
+            elif 'tempfile.mktemp' in func_name:
+                description += " (insecure temporary file creation)"
+                suggestion += " Use tempfile.mkstemp() or tempfile.NamedTemporaryFile() instead."
 
             self.issues['critical'].append({
                 'line': node.lineno,
@@ -763,6 +783,7 @@ def parse_args():
     return parser.parse_args(), parser
 
 def get_files_to_analyze(args):
+    """Collect all Python files to analyze based on arguments"""
     files_to_analyze = []
     if args.file:
         if not os.path.exists(args.file):
@@ -806,6 +827,8 @@ def main():
             print(f"⚠️  Error running shared coverage: {e}")
 
     reports = []
+    api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+
     for file_path in files_to_analyze:
         analyzer = CodeQualityAnalyzer(file_path)
         report = analyzer.analyze(test_file=args.test_file, use_existing_coverage=use_existing_coverage)
@@ -817,8 +840,6 @@ def main():
                 analyzer.get_llm_review(report, api_key, args.model, args.api_base)
                 report = analyzer.generate_report()
 
-        reports.append((analyzer, report))
-
         if args.llm_prompt:
             print("\n" + "="*80)
             print("🤖 LLM ENRICHMENT PROMPT")
@@ -828,10 +849,10 @@ def main():
         else:
             analyzer.print_report(report)
 
-    if args.output and reports:
+    if args.output and results:
         markdown_reports = [
             analyzer.generate_markdown_report(report)
-            for analyzer, report in reports
+            for analyzer, report in results
         ]
         full_report = "\n\n---\n\n".join(markdown_reports)
 

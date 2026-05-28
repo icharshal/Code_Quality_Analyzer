@@ -12,6 +12,7 @@ import ast
 import os
 import sys
 import argparse
+import subprocess
 from typing import Dict, Optional
 import re
 import json
@@ -192,7 +193,7 @@ class CodeQualityAnalyzer:
                 if count > 2:
                     self.duplication_found = True
 
-    def analyze(self, test_file: Optional[str] = None) -> Dict:
+    def analyze(self, test_file: Optional[str] = None, use_existing_coverage: bool = False) -> Dict:
         """Run complete analysis"""
         print(f"🔍 Analyzing {self.file_name}...")
         
@@ -231,7 +232,10 @@ class CodeQualityAnalyzer:
         
         # Run coverage if requested
         if test_file:
-            self._run_coverage(test_file)
+            if use_existing_coverage:
+                self._collect_coverage_data()
+            else:
+                self._run_coverage(test_file)
 
         # Calculate overall score
         self._calculate_scores()
@@ -240,50 +244,65 @@ class CodeQualityAnalyzer:
     
     def _run_coverage(self, test_file: str):
         """Run tests and collect coverage data"""
-        if coverage is None:
-            print("⚠️  Warning: 'coverage' package not installed. Skipping coverage analysis.")
-            return
-
         if not os.path.isfile(test_file):
             print(f"⚠️  Warning: Test file not found: {test_file}")
             return
 
         print(f"🧪 Running coverage for {test_file}...")
-        cov = coverage.Coverage(source=[os.path.dirname(self.file_path)])
-        cov.start()
+
+        # Cleanup old data
+        for f in ['.coverage', 'coverage.json']:
+            if os.path.exists(f):
+                os.remove(f)
 
         try:
-            self._execute_tests(test_file)
-        finally:
-            cov.stop()
-            cov.save()
-            self._collect_coverage_data(cov)
+            test_dir = os.path.dirname(os.path.abspath(test_file))
+            env = os.environ.copy()
+            env["PYTHONPATH"] = f"{os.getcwd()}:{test_dir}:{env.get('PYTHONPATH', '')}"
 
-    def _execute_tests(self, test_file: str):
-        """Helper to execute tests for coverage"""
-        import unittest
-        import importlib.util
-
-        loader = unittest.TestLoader()
-        sys.path.append(os.getcwd())
-        sys.path.append(os.path.dirname(os.path.abspath(test_file)))
-
-        module_name = os.path.basename(test_file).replace('.py', '')
-        try:
-            spec = importlib.util.spec_from_file_location(module_name, test_file)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                suite = loader.loadTestsFromModule(module)
-                unittest.TextTestRunner(verbosity=0).run(suite)
+            # Use coverage CLI via subprocess for isolation
+            # Run via 'unittest' module to support files without unittest.main()
+            subprocess.run(
+                [sys.executable, "-m", "coverage", "run", "--source", ".", "-m", "unittest", test_file],
+                env=env,
+                capture_output=True,
+                check=False,
+                timeout=60
+            )
+            self._collect_coverage_data()
+        except subprocess.TimeoutExpired:
+            print(f"⚠️  Error: Coverage analysis timed out for {test_file}")
         except Exception as e:
-            print(f"⚠️  Error running tests: {e}")
+            print(f"⚠️  Error running coverage: {e}")
+        finally:
+            # Final cleanup
+            for f in ['.coverage', 'coverage.json']:
+                if os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
 
-    def _collect_coverage_data(self, cov):
-        """Helper to collect coverage data from coverage object"""
+    def _collect_coverage_data(self):
+        """Helper to collect coverage data from coverage output"""
         try:
-            analysis = cov._analyze(self.file_path)
-            self.metrics['coverage'] = analysis.numbers.pc_covered
+            # Generate JSON report from coverage data
+            subprocess.run(
+                [sys.executable, "-m", "coverage", "json"],
+                capture_output=True,
+                check=False
+            )
+
+            if os.path.exists('coverage.json'):
+                with open('coverage.json', 'r') as f:
+                    data = json.load(f)
+
+                # Find coverage for our specific file
+                # The file_path in coverage.json might be absolute or relative
+                for file_name, file_data in data.get('files', {}).items():
+                    if os.path.abspath(file_name) == os.path.abspath(self.file_path):
+                        self.metrics['coverage'] = file_data['summary']['percent_covered']
+                        break
         except Exception as e:
             print(f"⚠️  Error analyzing coverage: {e}")
 
@@ -781,21 +800,44 @@ def get_files_to_analyze(args):
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
     
+    return files_to_analyze
+
+def main():
+    args, parser = parse_args()
+
+    if not args.file and not args.directory:
+        parser.print_help()
+        sys.exit(1)
+
+    files_to_analyze = get_files_to_analyze(args)
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
+
+    api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+    
+    # Run coverage once if multiple files and test file provided
+    use_existing_coverage = False
+    if args.test_file and len(files_to_analyze) > 1:
+        print(f"🧪 Running test suite coverage once for {len(files_to_analyze)} files...")
+        try:
+            # We use a dummy analyzer just to run coverage
+            temp_analyzer = CodeQualityAnalyzer(files_to_analyze[0])
+            temp_analyzer._run_coverage(args.test_file)
+            use_existing_coverage = True
+        except Exception as e:
+            print(f"⚠️  Error running shared coverage: {e}")
 
     reports = []
     api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
 
     for file_path in files_to_analyze:
         analyzer = CodeQualityAnalyzer(file_path)
-        report = analyzer.analyze(test_file=args.test_file)
+        report = analyzer.analyze(test_file=args.test_file, use_existing_coverage=use_existing_coverage)
 
         if args.llm_review:
             if not api_key:
                 print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
             else:
                 analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-                # Re-generate report with LLM review
                 report = analyzer.generate_report()
 
         if args.llm_prompt:
@@ -806,19 +848,6 @@ def get_files_to_analyze(args):
             print("="*80 + "\n")
         else:
             analyzer.print_report(report)
-
-        reports.append((analyzer, report))
-
-    return reports
-
-def main():
-    args, parser = parse_args()
-
-    if not args.file and not args.directory:
-        parser.print_help()
-        sys.exit(1)
-
-    reports = get_files_to_analyze(args)
 
     if args.output and results:
         markdown_reports = [

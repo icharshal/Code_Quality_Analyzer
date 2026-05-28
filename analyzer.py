@@ -141,6 +141,7 @@ class CodeQualityAnalyzer:
         self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
         self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
+        self.overall_score = 0.0
 
     def _perform_line_analysis(self):
         """Perform all line-based analyses in a single pass"""
@@ -744,6 +745,7 @@ def parse_args():
     return parser.parse_args(), parser
 
 def get_files_to_analyze(args):
+    """Collect all Python files to analyze based on arguments"""
     files_to_analyze = []
     if args.file:
         if not os.path.exists(args.file):
@@ -760,37 +762,25 @@ def get_files_to_analyze(args):
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
     
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-    
-    reports = []
-    for file_path in files_to_analyze:
-        analyzer = CodeQualityAnalyzer(file_path)
-        report = analyzer.analyze(test_file=args.test_file)
+    return files_to_analyze
 
-        if args.llm_review:
-            api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
-            if not api_key:
-                print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
-            else:
-                analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-                # Re-generate report with LLM review
-                report = analyzer.generate_report()
+def process_file(file_path, args):
+    """Analyze a single file and return analyzer and report"""
+    analyzer = CodeQualityAnalyzer(file_path)
+    report = analyzer.analyze(test_file=args.test_file)
 
-        reports.append((analyzer, report))
-
-        if args.llm_prompt:
-            print("\n" + "="*80)
-            print("🤖 LLM ENRICHMENT PROMPT")
-            print("="*80)
-            print(analyzer.generate_llm_prompt(report))
-            print("="*80 + "\n")
+    if args.llm_review:
+        api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+        if not api_key:
+            print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
         else:
             analyzer.get_llm_review(report, api_key, args.model, args.api_base)
+            # Re-generate report with LLM review
             report = analyzer.generate_report()
 
     if args.llm_prompt:
         print("\n" + "="*80)
-        print("🤖 LLM ENRICHMENT PROMPT")
+        print(f"🤖 LLM ENRICHMENT PROMPT - {file_path}")
         print("="*80)
         print(analyzer.generate_llm_prompt(report))
         print("="*80 + "\n")
@@ -807,14 +797,16 @@ def main():
         sys.exit(1)
 
     files_to_analyze = get_files_to_analyze(args)
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
+    print(f"\n🔍 Found {len(files_to_analyze)} file(s) to analyze...\n")
 
-    all_reports = [process_file(f, args) for f in files_to_analyze]
+    results = []
+    for file_path in files_to_analyze:
+        results.append(process_file(file_path, args))
 
-    if args.output and reports:
+    if args.output and results:
         markdown_reports = [
             analyzer.generate_markdown_report(report)
-            for analyzer, report in reports
+            for analyzer, report in results
         ]
         full_report = "\n\n---\n\n".join(markdown_reports)
 

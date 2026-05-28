@@ -12,10 +12,12 @@ import ast
 import os
 import sys
 import argparse
+import subprocess
 from typing import Dict, Optional
 import re
 import json
 import urllib.request
+from urllib.parse import urlparse
 
 try:
     import coverage
@@ -63,51 +65,71 @@ class CodeAnalysisVisitor(ast.NodeVisitor):
         self.for_stack.pop()
 
     def visit_Call(self, node):
-        # Check for dangerous functions and prints
+        """Analyze function calls for security and performance issues"""
         func = node.func
         if isinstance(func, ast.Name):
-            func_id = func.id
-            if func_id in {'eval', 'exec'}:
-                self.dangerous_calls.append((node, func_id))
-            elif func_id == 'print':
-                self.print_calls.append(node)
+            self._check_name_call(node, func)
         elif isinstance(func, ast.Attribute):
-            if isinstance(func.value, ast.Name):
-                module = func.value.id
-                method = func.attr
-                full_name = f"{module}.{method}"
-
-                if module == 'os' and method in {'system', 'popen', 'spawnl', 'spawnle', 'spawnlp', 'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'}:
-                    self.dangerous_calls.append((node, full_name))
-                elif module == 'subprocess' and method in {'run', 'call', 'check_call', 'check_output', 'Popen'}:
-                    # Check for shell=True
-                    for keyword in node.keywords:
-                        if keyword.arg == 'shell':
-                            val = keyword.value
-                            is_true = False
-                            if isinstance(val, ast.Constant) and val.value is True:
-                                is_true = True
-                            # Support for older Python versions if needed, but avoid direct reference to avoid DeprecationWarning if possible
-                            elif type(val).__name__ == 'NameConstant' and getattr(val, 'value', None) is True:
-                                is_true = True
-
-                            if is_true:
-                                self.dangerous_calls.append((node, full_name))
-                elif module == 'pickle' and method in {'load', 'loads'}:
-                    self.dangerous_calls.append((node, full_name))
-                elif module == 'marshal' and method in {'load', 'loads'}:
-                    self.dangerous_calls.append((node, full_name))
-
-            # Check for list comprehension opportunities
-            if func.attr == 'append' and self.for_stack:
-                self.for_loops_with_append.update(self.for_stack)
+            self._check_attribute_call(node, func)
 
         self.generic_visit(node)
+
+    def _check_name_call(self, node, func):
+        """Check for dangerous built-in function calls"""
+        func_id = func.id
+        if func_id in {'eval', 'exec'}:
+            self.dangerous_calls.append((node, func_id))
+        elif func_id == 'print':
+            self.print_calls.append(node)
+
+    def _check_attribute_call(self, node, func):
+        """Check for dangerous module attribute calls and performance patterns"""
+        if isinstance(func.value, ast.Name):
+            self._check_dangerous_module_call(node, func)
+
+        # Check for list comprehension opportunities
+        if func.attr == 'append' and self.for_stack:
+            self.for_loops_with_append.update(self.for_stack)
+
+    def _check_dangerous_module_call(self, node, func):
+        """Detect dangerous calls to specific modules (os, subprocess, etc.)"""
+        module = func.value.id
+        method = func.attr
+        full_name = f"{module}.{method}"
+
+        if module == 'os' and method in {
+            'system', 'popen', 'spawnl', 'spawnle', 'spawnlp',
+            'spawnlpe', 'spawnv', 'spawnve', 'spawnvp', 'spawnvpe'
+        }:
+            self.dangerous_calls.append((node, full_name))
+        elif module == 'subprocess' and method in {'run', 'call', 'check_call', 'check_output', 'Popen'}:
+            if self._is_shell_true(node):
+                self.dangerous_calls.append((node, full_name))
+        elif module in {'pickle', 'marshal'} and method in {'load', 'loads'}:
+            self.dangerous_calls.append((node, full_name))
+        elif module == 'tempfile' and method == 'mktemp':
+            self.dangerous_calls.append((node, full_name))
+
+    def _is_shell_true(self, node) -> bool:
+        """Helper to check if a subprocess call uses shell=True"""
+        for keyword in node.keywords:
+            if keyword.arg == 'shell':
+                val = keyword.value
+                if isinstance(val, ast.Constant) and val.value is True:
+                    return True
+                # Compatibility for older AST versions
+                if type(val).__name__ == 'NameConstant' and getattr(val, 'value', None) is True:
+                    return True
+        return False
 
 
 class CodeQualityAnalyzer:
     """Analyzes Python code for quality metrics and issues"""
     
+    # Pre-compile regex patterns as class constants for performance
+    SECRET_RE = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
+    NAMING_RE = re.compile(r'(?<!^)(?=[A-Z])')
+
     def __init__(self, file_path: str):
         self.file_path = os.path.abspath(file_path)
         self.file_name = os.path.basename(file_path)
@@ -137,10 +159,8 @@ class CodeQualityAnalyzer:
             'best_practices': 0
         }
         self.llm_review = None
-        # Pre-compile secret detection regex for performance
-        self.secret_re = re.compile(r'(password|api_key|secret|token)\s*=\s*["\'].*["\']', re.IGNORECASE)
-        self.naming_re = re.compile(r'(?<!^)(?=[A-Z])')
         self.duplication_found = False
+        self.overall_score = 0.0
 
     def _perform_line_analysis(self):
         """Perform all line-based analyses in a single pass"""
@@ -159,7 +179,7 @@ class CodeQualityAnalyzer:
                 self.metrics['comment_lines'] += 1
 
             # 2. Secret detection
-            if self.secret_re.search(line):
+            if self.SECRET_RE.search(line):
                 self.issues['critical'].append({
                     'line': i,
                     'issue': 'Hardcoded Secret',
@@ -175,7 +195,7 @@ class CodeQualityAnalyzer:
                 if count > 2:
                     self.duplication_found = True
 
-    def analyze(self, test_file: Optional[str] = None) -> Dict:
+    def analyze(self, test_file: Optional[str] = None, use_existing_coverage: bool = False) -> Dict:
         """Run complete analysis"""
         print(f"🔍 Analyzing {self.file_name}...")
         
@@ -214,7 +234,10 @@ class CodeQualityAnalyzer:
         
         # Run coverage if requested
         if test_file:
-            self._run_coverage(test_file)
+            if use_existing_coverage:
+                self._collect_coverage_data()
+            else:
+                self._run_coverage(test_file)
 
         # Calculate overall score
         self._calculate_scores()
@@ -223,50 +246,65 @@ class CodeQualityAnalyzer:
     
     def _run_coverage(self, test_file: str):
         """Run tests and collect coverage data"""
-        if coverage is None:
-            print("⚠️  Warning: 'coverage' package not installed. Skipping coverage analysis.")
-            return
-
         if not os.path.isfile(test_file):
             print(f"⚠️  Warning: Test file not found: {test_file}")
             return
 
         print(f"🧪 Running coverage for {test_file}...")
-        cov = coverage.Coverage(source=[os.path.dirname(self.file_path)])
-        cov.start()
+
+        # Cleanup old data
+        for f in ['.coverage', 'coverage.json']:
+            if os.path.exists(f):
+                os.remove(f)
 
         try:
-            self._execute_tests(test_file)
-        finally:
-            cov.stop()
-            cov.save()
-            self._collect_coverage_data(cov)
+            test_dir = os.path.dirname(os.path.abspath(test_file))
+            env = os.environ.copy()
+            env["PYTHONPATH"] = f"{os.getcwd()}:{test_dir}:{env.get('PYTHONPATH', '')}"
 
-    def _execute_tests(self, test_file: str):
-        """Helper to execute tests for coverage"""
-        import unittest
-        import importlib.util
-
-        loader = unittest.TestLoader()
-        sys.path.append(os.getcwd())
-        sys.path.append(os.path.dirname(os.path.abspath(test_file)))
-
-        module_name = os.path.basename(test_file).replace('.py', '')
-        try:
-            spec = importlib.util.spec_from_file_location(module_name, test_file)
-            if spec and spec.loader:
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                suite = loader.loadTestsFromModule(module)
-                unittest.TextTestRunner(verbosity=0).run(suite)
+            # Use coverage CLI via subprocess for isolation
+            # Run via 'unittest' module to support files without unittest.main()
+            subprocess.run(
+                [sys.executable, "-m", "coverage", "run", "--source", ".", "-m", "unittest", test_file],
+                env=env,
+                capture_output=True,
+                check=False,
+                timeout=60
+            )
+            self._collect_coverage_data()
+        except subprocess.TimeoutExpired:
+            print(f"⚠️  Error: Coverage analysis timed out for {test_file}")
         except Exception as e:
-            print(f"⚠️  Error running tests: {e}")
+            print(f"⚠️  Error running coverage: {e}")
+        finally:
+            # Final cleanup
+            for f in ['.coverage', 'coverage.json']:
+                if os.path.exists(f):
+                    try:
+                        os.remove(f)
+                    except:
+                        pass
 
-    def _collect_coverage_data(self, cov):
-        """Helper to collect coverage data from coverage object"""
+    def _collect_coverage_data(self):
+        """Helper to collect coverage data from coverage output"""
         try:
-            analysis = cov._analyze(self.file_path)
-            self.metrics['coverage'] = analysis.numbers.pc_covered
+            # Generate JSON report from coverage data
+            subprocess.run(
+                [sys.executable, "-m", "coverage", "json"],
+                capture_output=True,
+                check=False
+            )
+
+            if os.path.exists('coverage.json'):
+                with open('coverage.json', 'r') as f:
+                    data = json.load(f)
+
+                # Find coverage for our specific file
+                # The file_path in coverage.json might be absolute or relative
+                for file_name, file_data in data.get('files', {}).items():
+                    if os.path.abspath(file_name) == os.path.abspath(self.file_path):
+                        self.metrics['coverage'] = file_data['summary']['percent_covered']
+                        break
         except Exception as e:
             print(f"⚠️  Error analyzing coverage: {e}")
 
@@ -388,6 +426,9 @@ class CodeQualityAnalyzer:
             elif 'pickle.' in func_name or 'marshal.' in func_name:
                 description += " (insecure deserialization)"
                 suggestion += " Use safer formats like JSON for untrusted data."
+            elif 'tempfile.mktemp' in func_name:
+                description += " (insecure temporary file creation)"
+                suggestion += " Use tempfile.mkstemp() or tempfile.NamedTemporaryFile() instead."
 
             self.issues['critical'].append({
                 'line': node.lineno,
@@ -460,7 +501,7 @@ class CodeQualityAnalyzer:
                     'issue': 'Naming Convention',
                     'description': f"Function '{node.name}' should use snake_case",
                     'severity': 'LOW',
-                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.naming_re.sub('_', node.name).lower()}')."
+                    'suggestion': f"Rename '{node.name}' to use snake_case (e.g., '{self.NAMING_RE.sub('_', node.name).lower()}')."
                 })
                 score -= 0.3
         
@@ -695,6 +736,12 @@ class CodeQualityAnalyzer:
 
     def get_llm_review(self, report: Dict, api_key: str, model: str = "gpt-4o", api_base: str = "https://api.openai.com/v1/chat/completions") -> Optional[str]:
         """Fetch code review from an LLM API"""
+        # SSRF Protection: Validate the api_base URL
+        parsed_url = urlparse(api_base)
+        if parsed_url.scheme != 'https' or parsed_url.netloc != 'api.openai.com':
+            print(f"❌ Security Error: Untrusted API base URL: {api_base}")
+            return None
+
         print(f"🤖 Fetching LLM review using {model}...")
 
         prompt = self.generate_llm_prompt(report)
@@ -751,6 +798,7 @@ def parse_args():
     return parser.parse_args(), parser
 
 def get_files_to_analyze(args):
+    """Collect all Python files to analyze based on arguments"""
     files_to_analyze = []
     if args.file:
         if not os.path.exists(args.file):
@@ -767,23 +815,31 @@ def get_files_to_analyze(args):
                 if file.endswith('.py'):
                     files_to_analyze.append(os.path.join(root, file))
     
+    return files_to_analyze
+
+def main():
+    args, parser = parse_args()
+
+    if not args.file and not args.directory:
+        parser.print_help()
+        sys.exit(1)
+
+    files_to_analyze = get_files_to_analyze(args)
     print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
-    
+
     reports = []
+    api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
+
     for file_path in files_to_analyze:
         analyzer = CodeQualityAnalyzer(file_path)
-        report = analyzer.analyze(test_file=args.test_file)
+        report = analyzer.analyze(test_file=args.test_file, use_existing_coverage=use_existing_coverage)
 
         if args.llm_review:
-            api_key = args.api_key or os.environ.get('OPENAI_API_KEY')
             if not api_key:
                 print("❌ Error: API key required for LLM review. Use --api-key or set OPENAI_API_KEY environment variable.")
             else:
                 analyzer.get_llm_review(report, api_key, args.model, args.api_base)
-                # Re-generate report with LLM review
                 report = analyzer.generate_report()
-
-        reports.append((analyzer, report))
 
         if args.llm_prompt:
             print("\n" + "="*80)
@@ -810,15 +866,12 @@ def main():
         parser.print_help()
         sys.exit(1)
 
-    files_to_analyze = get_files_to_analyze(args)
-    print(f"\n🔍 Analyzing {len(files_to_analyze)} file(s)...\n")
+        reports.append((analyzer, report))
 
-    all_reports = [process_file(f, args) for f in files_to_analyze]
-
-    if args.output and reports:
+    if args.output and results:
         markdown_reports = [
             analyzer.generate_markdown_report(report)
-            for analyzer, report in reports
+            for analyzer, report in results
         ]
         full_report = "\n\n---\n\n".join(markdown_reports)
 
